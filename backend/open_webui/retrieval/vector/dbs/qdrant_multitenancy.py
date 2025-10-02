@@ -43,7 +43,9 @@ def _metadata_filter(key: str, value: Any) -> models.FieldCondition:
     )
 
 
-bm25_embedding_model = SparseTextEmbedding("Qdrant/bm25", specific_model_path="/tmp/fastembed_cache/models--Qdrant--bm25")
+bm25_embedding_model = SparseTextEmbedding(
+    "Qdrant/bm25", specific_model_path="/tmp/fastembed_cache/models--Qdrant--bm25"
+)
 
 
 class QdrantClient(VectorDBBase):
@@ -308,11 +310,7 @@ class QdrantClient(VectorDBBase):
         tenant_filter = _tenant_filter(tenant_id)
 
         prefetch = [
-            models.Prefetch(
-                query=vectors[0],
-                using="dense",
-                limit=limit,
-            ),
+            models.Prefetch(query=vectors[0], using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
                 using="sparse",
@@ -326,7 +324,10 @@ class QdrantClient(VectorDBBase):
             limit=limit,
             query_filter=models.Filter(must=[tenant_filter]),
         )
-        get_result = self._result_to_get_result(query_response.points)
+
+        # Really limit the points
+        points = query_response.points[:limit]
+        get_result = self._result_to_get_result(points)
         return SearchResult(
             ids=get_result.ids,
             documents=get_result.documents,

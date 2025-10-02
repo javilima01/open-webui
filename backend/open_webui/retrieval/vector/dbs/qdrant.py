@@ -30,7 +30,9 @@ NO_LIMIT = 999999999
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
 
-bm25_embedding_model = SparseTextEmbedding("Qdrant/bm25", specific_model_path="/tmp/fastembed_cache/models--Qdrant--bm25")
+bm25_embedding_model = SparseTextEmbedding(
+    "Qdrant/bm25", specific_model_path="/tmp/fastembed_cache/models--Qdrant--bm25"
+)
 
 
 class QdrantClient(VectorDBBase):
@@ -197,11 +199,7 @@ class QdrantClient(VectorDBBase):
             limit = NO_LIMIT  # otherwise qdrant would set limit to 10!
 
         prefetch = [
-            models.Prefetch(
-                query=vectors,
-                using="dense",
-                limit=limit,
-            ),
+            models.Prefetch(query=vectors, using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
                 using="sparse",
@@ -214,7 +212,10 @@ class QdrantClient(VectorDBBase):
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
         )
-        get_result = self._result_to_get_result(query_response.points)
+
+        # Really limit the points
+        points = query_response.points[:limit]
+        get_result = self._result_to_get_result(points)
         return SearchResult(
             ids=get_result.ids,
             documents=get_result.documents,
