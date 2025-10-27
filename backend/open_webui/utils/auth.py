@@ -21,7 +21,7 @@ from typing import Optional, Union, List, Dict
 
 from opentelemetry import trace
 
-from backend.open_webui.models.groups import Groups
+from open_webui.models.groups import Groups
 from open_webui.models.users import Users
 
 from open_webui.constants import ERROR_MESSAGES
