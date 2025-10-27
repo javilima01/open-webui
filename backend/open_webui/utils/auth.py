@@ -235,14 +235,6 @@ def get_current_user(
                 status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.API_KEY_NOT_ALLOWED
             )
         
-        groups = Groups.get_groups_by_member_id(user.id)
-        # Check if user in special group. Get the group for env variable
-        if not any(WEBUI_API_GROUP == group.name for group in groups):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED_USER,
-            )
-
         if request.app.state.config.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS:
             allowed_paths = [
                 path.strip()
@@ -262,6 +254,15 @@ def get_current_user(
                 )
 
         user = get_current_user_by_api_key(token)
+
+        if token.startswith("sk-"):
+            groups = Groups.get_groups_by_member_id(user.id)
+            # Check if user in special group. Get the group for env variable
+            if not any(WEBUI_API_GROUP == group.name for group in groups):
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED_USER,
+                )
 
         # Add user info to current span
         current_span = trace.get_current_span()
