@@ -409,6 +409,7 @@ except ValueError:
 ####################################
 
 WEBUI_AUTH = os.environ.get("WEBUI_AUTH", "True").lower() == "true"
+WEBUI_API_GROUP = os.environ.get("WEBUI_API_GROUP", "openwebui-api")
 
 ENABLE_INITIAL_ADMIN_SIGNUP = (
     os.environ.get("ENABLE_INITIAL_ADMIN_SIGNUP", "False").lower() == "true"

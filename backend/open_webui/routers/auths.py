@@ -32,6 +32,7 @@ from open_webui.env import (
     WEBUI_AUTH_SIGNOUT_REDIRECT_URL,
     ENABLE_INITIAL_ADMIN_SIGNUP,
     SRC_LOG_LEVELS,
+    WEBUI_API_GROUP
 )
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response, JSONResponse
@@ -1037,6 +1038,14 @@ async def update_ldap_config(
 @router.post("/api_key", response_model=ApiKey)
 async def generate_api_key(request: Request, user=Depends(get_current_user)):
     if not request.app.state.config.ENABLE_API_KEY:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED,
+        )
+    
+    groups = Groups.get_groups_by_member_id(user.id)
+    # Check if user in special group. Get the group for env variable
+    if any(WEBUI_API_GROUP == group.name for group in groups):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED,
