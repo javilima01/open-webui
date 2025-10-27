@@ -21,6 +21,7 @@ from typing import Optional, Union, List, Dict
 
 from opentelemetry import trace
 
+from backend.open_webui.models.groups import Groups
 from open_webui.models.users import Users
 
 from open_webui.constants import ERROR_MESSAGES
@@ -28,6 +29,7 @@ from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import (
     OFFLINE_MODE,
     LICENSE_BLOB,
+    WEBUI_API_GROUP,
     pk,
     WEBUI_SECRET_KEY,
     TRUSTED_SIGNATURE_KEY,
@@ -231,6 +233,14 @@ def get_current_user(
         if not request.state.enable_api_key:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.API_KEY_NOT_ALLOWED
+            )
+        
+        groups = Groups.get_groups_by_member_id(user.id)
+        # Check if user in special group. Get the group for env variable
+        if not any(WEBUI_API_GROUP == group.name for group in groups):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED_USER,
             )
 
         if request.app.state.config.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS:
