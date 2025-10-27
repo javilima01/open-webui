@@ -170,18 +170,6 @@ def query_doc_with_hybrid_search(
     hybrid_bm25_weight: float,
 ) -> dict:
     try:
-        # if not collection_result.documents[0]:
-        #     log.warning(f"query_doc_with_hybrid_search:no_docs {collection_name}")
-        #     return {"documents": [], "metadatas": [], "distances": []}
-
-        # log.debug(f"query_doc_with_hybrid_search:doc {collection_name}")
-
-        # bm25_retriever = BM25Retriever.from_texts(
-        #     texts=collection_result.documents[0],
-        #     metadatas=collection_result.metadatas[0],
-        # )
-        # bm25_retriever.k = k
-
         vector_search_retriever = VectorSearchRetriever(
             collection_name=collection_name,
             embedding_function=embedding_function,
@@ -189,19 +177,9 @@ def query_doc_with_hybrid_search(
             bm25_weight=hybrid_bm25_weight
         )
 
-        # if hybrid_bm25_weight <= 0:
         ensemble_retriever = EnsembleRetriever(
             retrievers=[vector_search_retriever], weights=[1.0]
         )
-        # elif hybrid_bm25_weight >= 1:
-        #     ensemble_retriever = EnsembleRetriever(
-        #         retrievers=[bm25_retriever], weights=[1.0]
-        #     )
-        # else:
-        #     ensemble_retriever = EnsembleRetriever(
-        #         retrievers=[bm25_retriever, vector_search_retriever],
-        #         weights=[hybrid_bm25_weight, 1.0 - hybrid_bm25_weight],
-        #     )
 
         compressor = RerankCompressor(
             embedding_function=embedding_function,
@@ -400,21 +378,6 @@ def query_collection_with_hybrid_search(
     # This is a botleneck when the collectins are large.
     # Since it's only used for BM25, and we are using qdrant,
     # Which natively supports BM25, avoid the step or retrieval the whole collection.
-    # Fetch collection data once per collection sequentially
-    # Avoid fetching the same data multiple times later
-    # collection_results = {}
-    # for collection_name in collection_names:
-    #     try:
-    #         log.debug(
-    #             f"query_collection_with_hybrid_search:VECTOR_DB_CLIENT.get:collection {collection_name}"
-    #         )
-    #         collection_results[collection_name] = VECTOR_DB_CLIENT.get(
-    #             collection_name=collection_name
-    #         )
-    #     except Exception as e:
-    #         log.exception(f"Failed to fetch collection {collection_name}: {e}")
-    #         collection_results[collection_name] = None
-
     log.info(
         f"Starting hybrid search for {len(queries)} queries in {len(collection_names)} collections..."
     )
