@@ -1045,7 +1045,7 @@ async def generate_api_key(request: Request, user=Depends(get_current_user)):
     
     groups = Groups.get_groups_by_member_id(user.id)
     # Check if user in special group. Get the group for env variable
-    if any(WEBUI_API_GROUP == group.name for group in groups):
+    if not any(WEBUI_API_GROUP == group.name for group in groups):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.API_KEY_CREATION_NOT_ALLOWED,
