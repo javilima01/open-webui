@@ -134,7 +134,7 @@ async def process_pipeline_outlet_filter(request, payload, user, models):
 
             headers = {"Authorization": f"Bearer {key}"}
             request_data = {
-                "user": user.simplified,
+                "user": user.simplified(),
                 "body": payload,
             }
 
