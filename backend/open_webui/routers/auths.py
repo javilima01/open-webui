@@ -373,6 +373,7 @@ async def ldap_auth(request: Request, response: Response, form_data: LdapForm):
                         password=str(uuid.uuid4()),
                         name=cn,
                         role=role,
+                        username=username
                     )
 
                     if not user:
@@ -391,6 +392,9 @@ async def ldap_auth(request: Request, response: Response, form_data: LdapForm):
             user = Auths.authenticate_user_by_email(email)
 
             if user:
+                # Update username of the user
+                Users.update_user_by_id(id=user.id, updated={"username": username})
+
                 expires_delta = parse_duration(request.app.state.config.JWT_EXPIRES_IN)
                 expires_at = None
                 if expires_delta:
