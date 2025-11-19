@@ -81,6 +81,15 @@ class UserModel(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    def simplified(self):
+        return {
+            "id": self.id, 
+            "email": self.email, 
+            "name": self.name, 
+            "role": self.role,
+            "username": self.username
+        }
+
 
 ####################
 # Forms
