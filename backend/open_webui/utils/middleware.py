@@ -139,14 +139,14 @@ DEFAULT_SOLUTION_TAGS = [("<|begin_of_solution|>", "<|end_of_solution|>")]
 DEFAULT_CODE_INTERPRETER_TAGS = [("<code_interpreter>", "</code_interpreter>")]
 
 
-# UI event types that should be filtered from API responses
-UI_EVENT_TYPES = {"status", "citation", "message", "chat:title", "chat:tags", "source", "sources"}
+# UI event types that should be filtered from API responses (NOT including 'message' which contains actual content)
+UI_EVENT_TYPES_TO_FILTER = {"status", "citation", "chat:title", "chat:tags", "source", "sources"}
 
 
-def is_ui_event(data):
+def is_ui_event_to_filter(data):
     """
     Check if data is a UI-specific event that should be filtered from API responses.
-    Handles both wrapped format {"event": {"type": ...}} and raw format {"type": ...}.
+    Returns True for status, citation, etc. but NOT for 'message' type which contains actual content.
     """
     if not isinstance(data, dict):
         return False
@@ -156,21 +156,87 @@ def is_ui_event(data):
         event = data.get("event", {})
         if isinstance(event, dict):
             event_type = event.get("type", "")
-            if event_type in UI_EVENT_TYPES:
+            if event_type in UI_EVENT_TYPES_TO_FILTER:
                 return True
     
     # Check for raw event format: {"type": "status", ...}
     event_type = data.get("type", "")
-    if event_type in UI_EVENT_TYPES:
+    if event_type in UI_EVENT_TYPES_TO_FILTER:
         return True
     
     return False
 
 
-def filter_ui_event_from_line(line):
+def is_message_event(data):
     """
-    Filter UI events from SSE data lines for API responses.
-    Returns the line unchanged if it's valid OpenAI-compatible data, or None if it should be filtered.
+    Check if data is a 'message' type event containing actual LLM response content.
+    """
+    if not isinstance(data, dict):
+        return False
+    
+    # Check for wrapped event format: {"event": {"type": "message", "data": {"content": "..."}}}
+    if "event" in data:
+        event = data.get("event", {})
+        if isinstance(event, dict) and event.get("type") == "message":
+            return True
+    
+    # Check for raw event format: {"type": "message", "data": {"content": "..."}}
+    if data.get("type") == "message":
+        return True
+    
+    return False
+
+
+def extract_message_content(data):
+    """
+    Extract the actual message content from a 'message' type event.
+    """
+    if not isinstance(data, dict):
+        return None
+    
+    # Wrapped format: {"event": {"type": "message", "data": {"content": "..."}}}
+    if "event" in data:
+        event = data.get("event", {})
+        if isinstance(event, dict) and event.get("type") == "message":
+            return event.get("data", {}).get("content", "")
+    
+    # Raw format: {"type": "message", "data": {"content": "..."}}
+    if data.get("type") == "message":
+        return data.get("data", {}).get("content", "")
+    
+    return None
+
+
+def convert_message_event_to_openai_chunk(data, model_id=""):
+    """
+    Convert a 'message' type event to an OpenAI-compatible streaming chunk.
+    """
+    content = extract_message_content(data)
+    if content is None:
+        return None
+    
+    import uuid
+    chunk = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model_id,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": content},
+            "finish_reason": None
+        }]
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def filter_ui_event_from_line(line, model_id=""):
+    """
+    Filter/convert UI events from SSE data lines for API responses.
+    - Filters out status, citation, etc.
+    - Converts 'message' events to OpenAI chunk format
+    - Passes through valid OpenAI chunks unchanged
+    Returns the line (possibly converted), or None if it should be filtered.
     """
     # Handle bytes
     if isinstance(line, bytes):
@@ -184,21 +250,85 @@ def filter_ui_event_from_line(line):
     
     # Handle SSE format: "data: {...}\n\n" or just the data part
     data_str = line
+    prefix = ""
     if line.startswith("data:"):
+        prefix = "data:"
         data_str = line[5:].strip()
-    elif line.startswith("data: "):
-        data_str = line[6:].strip()
     
     if data_str == "[DONE]":
         return line
     
     try:
         data = json.loads(data_str)
-        if is_ui_event(data):
+        
+        # Filter out UI-only events (status, citation, etc.)
+        if is_ui_event_to_filter(data):
             return None
+        
+        # Convert 'message' events to OpenAI chunk format
+        if is_message_event(data):
+            return convert_message_event_to_openai_chunk(data, model_id)
+        
+        # Pass through valid OpenAI chunks unchanged
         return line
     except json.JSONDecodeError:
         return line
+
+
+def extract_message_content_from_concatenated_events(content_str):
+    """
+    Parse concatenated event JSON objects from non-streaming response content.
+    Extract only the 'message' type events and return their combined content.
+    """
+    if not isinstance(content_str, str):
+        return content_str
+    
+    # Check if it looks like concatenated events
+    if "{'event':" not in content_str and '{"event":' not in content_str:
+        return content_str
+    
+    extracted_content = []
+    
+    # Try to parse concatenated JSON objects (they might use single or double quotes)
+    import re
+    
+    # Pattern to match event objects - handles both single and double quotes
+    # This is a simple approach - find balanced braces
+    depth = 0
+    start = -1
+    
+    for i, char in enumerate(content_str):
+        if char == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0 and start >= 0:
+                obj_str = content_str[start:i+1]
+                try:
+                    # Try parsing as JSON first
+                    obj = json.loads(obj_str)
+                except json.JSONDecodeError:
+                    # Try converting Python dict string to JSON
+                    try:
+                        # Replace single quotes with double quotes (careful with escaped quotes)
+                        obj_str_fixed = obj_str.replace("'", '"').replace("True", "true").replace("False", "false").replace("None", "null")
+                        obj = json.loads(obj_str_fixed)
+                    except:
+                        continue
+                
+                # Extract content from 'message' type events only
+                msg_content = extract_message_content(obj)
+                if msg_content:
+                    extracted_content.append(msg_content)
+                
+                start = -1
+    
+    if extracted_content:
+        return "".join(extracted_content)
+    
+    return content_str
 
 
 def process_tool_result(
@@ -1868,6 +1998,19 @@ async def process_chat_response(
 
             return response
         else:
+            # Non-streaming API request (no UI session)
+            # Extract message content from concatenated events if needed
+            if isinstance(response, dict):
+                choices = response.get("choices", [])
+                if choices and len(choices) > 0:
+                    message = choices[0].get("message", {})
+                    content = message.get("content", "")
+                    if content and isinstance(content, str):
+                        # Check if content contains concatenated event objects
+                        extracted = extract_message_content_from_concatenated_events(content)
+                        if extracted != content:
+                            response["choices"][0]["message"]["content"] = extracted
+            
             if events and isinstance(events, list) and isinstance(response, dict):
                 extra_response = {}
                 for event in events:
@@ -3124,7 +3267,9 @@ async def process_chat_response(
 
     else:
         # Fallback to the original response (API requests without UI session)
-        # Filter out UI-specific events for clean OpenAI-compatible responses
+        # Filter out UI-specific events, convert 'message' events to OpenAI format
+        model_id = form_data.get("model", "")
+        
         async def stream_wrapper(original_generator, events):
             def wrap_item(item):
                 return f"data: {item}\n\n"
@@ -3139,8 +3284,14 @@ async def process_chat_response(
                 )
 
                 if event:
-                    # Filter UI events for API responses
-                    if is_ui_event(event):
+                    # Filter UI-only events (status, citation, etc.) for API responses
+                    if is_ui_event_to_filter(event):
+                        continue
+                    # Convert 'message' events to OpenAI chunk format
+                    if is_message_event(event):
+                        chunk = convert_message_event_to_openai_chunk(event, model_id)
+                        if chunk:
+                            yield chunk
                         continue
                     yield wrap_item(json.dumps(event))
 
@@ -3154,8 +3305,8 @@ async def process_chat_response(
                 )
 
                 if data:
-                    # Filter UI events from SSE lines for API responses
-                    filtered_data = filter_ui_event_from_line(data)
+                    # Filter/convert UI events from SSE lines for API responses
+                    filtered_data = filter_ui_event_from_line(data, model_id)
                     if filtered_data:
                         yield filtered_data
 
