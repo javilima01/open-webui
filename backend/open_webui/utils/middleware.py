@@ -153,11 +153,7 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
     """
     # Handle bytes
     if isinstance(line, bytes):
-        try:
-            line = line.decode("utf-8", "replace")
-        except Exception:
-            return line
-    
+        line = line.decode("utf-8", "replace")
     if not isinstance(line, str):
         return line
     
@@ -168,42 +164,23 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
     
     try:
         data = json.loads(data_str)
-    except json.JSONDecodeError:
+    except:
         return line
     
+    # Extract event info from wrapped {"event": {...}} or raw {"type": ...}
+    evt = data.get("event", data) if isinstance(data.get("event"), dict) else data
+    evt_type = evt.get("type") if isinstance(evt, dict) else None
+    
+    if evt_type in _UI_EVENT_TYPES_TO_FILTER:
+        return None
+    
     # Get event type from wrapped or raw format
-    event_type = None
-    event_data = None
-    if "event" in data and isinstance(data.get("event"), dict):
-        event_type = data["event"].get("type")
-        event_data = data["event"].get("data", {})
-    elif "type" in data:
-        event_type = data.get("type")
-        event_data = data.get("data", {})
-    
-    # Filter UI-only events
-    if event_type in _UI_EVENT_TYPES_TO_FILTER:
-        return None
-    
-    # Convert 'message' events to OpenAI chunk format
-    if event_type == "message" and isinstance(event_data, dict):
-        content = event_data.get("content", "")
-        if content:
-            chunk = {
-                "id": chunk_id or f"chatcmpl-{model_id}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model_id,
-                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
-            }
-            return f"data: {json.dumps(chunk)}\n\n"
-        return None
-    
-    # Pass through OpenAI chunks but normalize the ID for consistency
-    if "object" in data and data.get("object") == "chat.completion.chunk" and chunk_id:
+    if evt_type == "message":
+        content = evt.get("data", {}).get("content", "")
+        return f'data: {json.dumps({"id": chunk_id or f"chatcmpl-{model_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model_id, "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]})}\n\n' if content else None
+    if data.get("object") == "chat.completion.chunk" and chunk_id:
         data["id"] = chunk_id
         return f"data: {json.dumps(data)}\n\n"
-    
     return line
 
 
@@ -212,53 +189,32 @@ def clean_api_response_content(content_str):
     Clean concatenated event objects from non-streaming API response content.
     Extracts only 'message' type event content.
     """
-    if not isinstance(content_str, str):
+    # if no event pattern, return as-is
+    if not isinstance(content_str, str) or ("{'event':" not in content_str and '{"event":' not in content_str):
         return content_str
     
-    # Quick check - if no event pattern, return as-is
-    if "{'event':" not in content_str and '{"event":' not in content_str:
-        return content_str
-    
-    extracted = []
-    depth = 0
-    start = -1
-    
-    for i, char in enumerate(content_str):
-        if char == '{':
-            if depth == 0:
-                start = i
+    extracted, depth, start = [], 0, -1
+    for i, c in enumerate(content_str):
+        if c == '{':
+            start = i if depth == 0 else start
             depth += 1
-        elif char == '}':
+        elif c == '}':
             depth -= 1
             if depth == 0 and start >= 0:
-                obj_str = content_str[start:i+1]
-                obj = None
-                
-                # Try parsing as JSON first
+                s = content_str[start:i+1]
                 try:
-                    obj = json.loads(obj_str)
-                except json.JSONDecodeError:
-                    pass
-                
-                # Try regex extraction for 'message' type with content
-                if obj is None and "'type': 'message'" in obj_str:
-                    import re
-                    match = re.search(r"'content':\s*'((?:[^'\\]|\\.)*)'", obj_str)
-                    if match:
-                        extracted.append(match.group(1).replace("\\'", "'"))
-                        start = -1
-                        continue
-                
-                if obj:
-                    # Extract content from 'message' events only
-                    event = obj.get("event", obj)
-                    if isinstance(event, dict) and event.get("type") == "message":
-                        msg = event.get("data", {}).get("content", "")
-                        if msg:
-                            extracted.append(msg)
+                    obj = json.loads(s)
+                except:
+                    if "'type': 'message'" in s:
+                        m = re.search(r"'content':\s*'((?:[^'\\]|\\.)*)'", s)
+                        if m: extracted.append(m.group(1).replace("\\'", "'"))
+                    start = -1
+                    continue
+                evt = obj.get("event", obj)
+                if isinstance(evt, dict) and evt.get("type") == "message":
+                    extracted.append(evt.get("data", {}).get("content", ""))
                 start = -1
-    
-    return "".join(extracted) if extracted else content_str
+    return "".join(extracted) or content_str
 
 
 def process_tool_result(
