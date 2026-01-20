@@ -139,6 +139,68 @@ DEFAULT_SOLUTION_TAGS = [("<|begin_of_solution|>", "<|end_of_solution|>")]
 DEFAULT_CODE_INTERPRETER_TAGS = [("<code_interpreter>", "</code_interpreter>")]
 
 
+# UI event types that should be filtered from API responses
+UI_EVENT_TYPES = {"status", "citation", "message", "chat:title", "chat:tags", "source", "sources"}
+
+
+def is_ui_event(data):
+    """
+    Check if data is a UI-specific event that should be filtered from API responses.
+    Handles both wrapped format {"event": {"type": ...}} and raw format {"type": ...}.
+    """
+    if not isinstance(data, dict):
+        return False
+    
+    # Check for wrapped event format: {"event": {"type": "status", ...}}
+    if "event" in data:
+        event = data.get("event", {})
+        if isinstance(event, dict):
+            event_type = event.get("type", "")
+            if event_type in UI_EVENT_TYPES:
+                return True
+    
+    # Check for raw event format: {"type": "status", ...}
+    event_type = data.get("type", "")
+    if event_type in UI_EVENT_TYPES:
+        return True
+    
+    return False
+
+
+def filter_ui_event_from_line(line):
+    """
+    Filter UI events from SSE data lines for API responses.
+    Returns the line unchanged if it's valid OpenAI-compatible data, or None if it should be filtered.
+    """
+    # Handle bytes
+    if isinstance(line, bytes):
+        try:
+            line = line.decode("utf-8", "replace")
+        except Exception:
+            return line
+    
+    if not isinstance(line, str):
+        return line
+    
+    # Handle SSE format: "data: {...}\n\n" or just the data part
+    data_str = line
+    if line.startswith("data:"):
+        data_str = line[5:].strip()
+    elif line.startswith("data: "):
+        data_str = line[6:].strip()
+    
+    if data_str == "[DONE]":
+        return line
+    
+    try:
+        data = json.loads(data_str)
+        if is_ui_event(data):
+            return None
+        return line
+    except json.JSONDecodeError:
+        return line
+
+
 def process_tool_result(
     request,
     tool_function_name,
@@ -3061,7 +3123,8 @@ async def process_chat_response(
         return await response_handler(response, events)
 
     else:
-        # Fallback to the original response
+        # Fallback to the original response (API requests without UI session)
+        # Filter out UI-specific events for clean OpenAI-compatible responses
         async def stream_wrapper(original_generator, events):
             def wrap_item(item):
                 return f"data: {item}\n\n"
@@ -3076,6 +3139,9 @@ async def process_chat_response(
                 )
 
                 if event:
+                    # Filter UI events for API responses
+                    if is_ui_event(event):
+                        continue
                     yield wrap_item(json.dumps(event))
 
             async for data in original_generator:
@@ -3088,7 +3154,10 @@ async def process_chat_response(
                 )
 
                 if data:
-                    yield data
+                    # Filter UI events from SSE lines for API responses
+                    filtered_data = filter_ui_event_from_line(data)
+                    if filtered_data:
+                        yield filtered_data
 
         return StreamingResponse(
             stream_wrapper(response.body_iterator, events),
