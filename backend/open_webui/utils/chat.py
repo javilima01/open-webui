@@ -54,6 +54,10 @@ from open_webui.utils.filter import (
     get_sorted_filter_ids,
     process_filter_functions,
 )
+from open_webui.utils.misc import (
+    openai_chat_chunk_message_template,
+    openai_chat_completion_message_template,
+)
 
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
 
@@ -61,6 +65,196 @@ from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+
+# UI event types that should NOT be sent to API clients
+UI_EVENT_TYPES = frozenset([
+    "status",
+    "citation",
+    "source",
+    "chat:title",
+    "chat:tags",
+    "chat:message:delta",
+    "chat:message:error",
+    "chat:message:follow_ups",
+    "chat:completion",
+    "chat:tasks:cancel",
+    "message",
+    "replace",
+    "embeds",
+    "files",
+])
+
+
+def is_api_request(metadata: dict) -> bool:
+    """
+    Determine if a request is an API request (no UI session) vs a UI request.
+    
+    API requests lack session_id, chat_id, and message_id metadata that UI
+    requests provide via WebSocket connections.
+    """
+    return not (
+        metadata.get("session_id")
+        and metadata.get("chat_id")
+        and metadata.get("message_id")
+    )
+
+
+def is_openai_compatible_chunk(data: dict) -> bool:
+    """
+    Check if a data chunk is OpenAI-compatible (has choices with delta).
+    """
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices", [])
+    if not choices:
+        return False
+    # Valid OpenAI chunk has delta in choices
+    return "delta" in choices[0] or "message" in choices[0]
+
+
+def is_ui_event(data: dict) -> bool:
+    """
+    Check if data is a UI-specific event that should be filtered for API clients.
+    """
+    if not isinstance(data, dict):
+        return False
+    event_type = data.get("type", "")
+    return event_type in UI_EVENT_TYPES
+
+
+def extract_content_from_ui_event(data: dict) -> Optional[str]:
+    """
+    Extract text content from UI event if it contains actual token content.
+    Returns None if no content should be emitted.
+    """
+    event_type = data.get("type", "")
+    event_data = data.get("data", {})
+    
+    if event_type == "message":
+        return event_data.get("content", "")
+    
+    return None
+
+
+async def wrap_streaming_response_for_api(
+    response: StreamingResponse,
+    model_id: str,
+) -> StreamingResponse:
+    """
+    Wrap a streaming response to filter out UI-specific events for API clients.
+    Only emits OpenAI-compatible streaming chunks.
+    """
+    
+    async def filtered_stream():
+        content_buffer = ""
+        async for chunk in response.body_iterator:
+            if isinstance(chunk, bytes):
+                chunk = chunk.decode("utf-8", errors="replace")
+            
+            # Handle SSE format
+            for line in chunk.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                    
+                # Handle [DONE] marker
+                if line == "data: [DONE]":
+                    # Emit final chunk with finish_reason
+                    finish_chunk = openai_chat_chunk_message_template(model_id, "")
+                    finish_chunk["choices"][0]["finish_reason"] = "stop"
+                    yield f"data: {json.dumps(finish_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    continue
+                
+                # Parse data lines
+                if line.startswith("data: "):
+                    json_str = line[6:]  # Remove "data: " prefix
+                    try:
+                        data = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Not valid JSON, skip
+                        continue
+                    
+                    # Check if this is already an OpenAI-compatible chunk
+                    if is_openai_compatible_chunk(data):
+                        yield f"data: {json.dumps(data)}\n\n"
+                        continue
+                    
+                    # Check if it's a UI event
+                    if is_ui_event(data):
+                        # Try to extract content from UI events
+                        content = extract_content_from_ui_event(data)
+                        if content:
+                            chunk_data = openai_chat_chunk_message_template(model_id, content)
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                        # Otherwise skip UI events
+                        continue
+                    
+                    # For any other dict data, try to emit as-is if it looks like OpenAI format
+                    if "choices" in data:
+                        yield f"data: {json.dumps(data)}\n\n"
+    
+    return StreamingResponse(
+        filtered_stream(),
+        media_type="text/event-stream",
+        headers=dict(response.headers) if hasattr(response, 'headers') else {},
+        background=response.background if hasattr(response, 'background') else None,
+    )
+
+
+def wrap_response_for_api(response: Any, model_id: str) -> dict:
+    """
+    Ensure a non-streaming response is in strict OpenAI format for API clients.
+    """
+    if isinstance(response, dict):
+        # Already a dict, check if it's OpenAI-compatible
+        if "choices" in response and response.get("object") in ["chat.completion", "chat.completion.chunk"]:
+            # Filter out any UI-specific fields
+            clean_response = {
+                "id": response.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}"),
+                "object": "chat.completion",
+                "created": response.get("created", int(time.time())),
+                "model": response.get("model", model_id),
+                "choices": response.get("choices", []),
+            }
+            if "usage" in response:
+                clean_response["usage"] = response["usage"]
+            return clean_response
+        
+        # Check if it's a UI event with content
+        if is_ui_event(response):
+            content = extract_content_from_ui_event(response)
+            if content:
+                return openai_chat_completion_message_template(model_id, content)
+            # Return empty completion for events without content
+            return openai_chat_completion_message_template(model_id, "")
+        
+        # Check for error responses
+        if "error" in response:
+            return response
+        
+        # Try to extract message content from various formats
+        if "message" in response:
+            msg = response["message"]
+            if isinstance(msg, dict):
+                content = msg.get("content", "")
+            else:
+                content = str(msg)
+            return openai_chat_completion_message_template(model_id, content)
+        
+        if "content" in response:
+            return openai_chat_completion_message_template(model_id, response["content"])
+        
+        # Fallback: return as-is (might be an error or special response)
+        return response
+    
+    # For string responses, wrap in OpenAI format
+    if isinstance(response, str):
+        return openai_chat_completion_message_template(model_id, response)
+    
+    # For other types, return as-is
+    return response
 
 
 async def generate_direct_chat_completion(
@@ -257,9 +451,19 @@ async def generate_chat_completion(
 
         if model.get("pipe"):
             # Below does not require bypass_filter because this is the only route the uses this function and it is already bypassing the filter
-            return await generate_function_chat_completion(
+            response = await generate_function_chat_completion(
                 request, form_data, user=user, models=models
             )
+            
+            # For API requests (no UI session), ensure OpenAI-compatible response format
+            metadata = form_data.get("metadata", {})
+            if is_api_request(metadata):
+                if isinstance(response, StreamingResponse):
+                    return await wrap_streaming_response_for_api(response, model_id)
+                else:
+                    return wrap_response_for_api(response, model_id)
+            
+            return response
         if model.get("owned_by") == "ollama":
             # Using /ollama/api/chat endpoint
             form_data = convert_payload_openai_to_ollama(form_data)
