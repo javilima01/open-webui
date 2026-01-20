@@ -148,7 +148,7 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
     Filter/convert a streaming SSE line for API responses.
     - Filters out UI events (status, citation, etc.)
     - Converts 'message' events to OpenAI chunk format
-    - Passes through valid OpenAI chunks unchanged
+    - Normalizes chunk IDs on pass-through OpenAI chunks
     Returns the line (possibly converted), or None if filtered.
     """
     # Handle bytes
@@ -199,14 +199,18 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
             return f"data: {json.dumps(chunk)}\n\n"
         return None
     
-    # Pass through OpenAI chunks unchanged
+    # Pass through OpenAI chunks but normalize the ID for consistency
+    if "object" in data and data.get("object") == "chat.completion.chunk" and chunk_id:
+        data["id"] = chunk_id
+        return f"data: {json.dumps(data)}\n\n"
+    
     return line
 
 
 def clean_api_response_content(content_str):
     """
     Clean concatenated event objects from non-streaming API response content.
-    Extracts only 'message' type event content, returns empty string if none found.
+    Extracts only 'message' type event content.
     """
     if not isinstance(content_str, str):
         return content_str
@@ -228,24 +232,33 @@ def clean_api_response_content(content_str):
             depth -= 1
             if depth == 0 and start >= 0:
                 obj_str = content_str[start:i+1]
+                obj = None
+                
+                # Try parsing as JSON first
                 try:
                     obj = json.loads(obj_str)
                 except json.JSONDecodeError:
-                    try:
-                        obj = json.loads(obj_str.replace("'", '"').replace("True", "true").replace("False", "false").replace("None", "null"))
-                    except:
+                    pass
+                
+                # Try regex extraction for 'message' type with content
+                if obj is None and "'type': 'message'" in obj_str:
+                    import re
+                    match = re.search(r"'content':\s*'((?:[^'\\]|\\.)*)'", obj_str)
+                    if match:
+                        extracted.append(match.group(1).replace("\\'", "'"))
                         start = -1
                         continue
                 
-                # Extract content from 'message' events only
-                event = obj.get("event", obj)
-                if isinstance(event, dict) and event.get("type") == "message":
-                    msg = event.get("data", {}).get("content", "")
-                    if msg:
-                        extracted.append(msg)
+                if obj:
+                    # Extract content from 'message' events only
+                    event = obj.get("event", obj)
+                    if isinstance(event, dict) and event.get("type") == "message":
+                        msg = event.get("data", {}).get("content", "")
+                        if msg:
+                            extracted.append(msg)
                 start = -1
     
-    return "".join(extracted) if extracted else ""
+    return "".join(extracted) if extracted else content_str
 
 
 def process_tool_result(
