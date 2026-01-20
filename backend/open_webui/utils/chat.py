@@ -91,13 +91,18 @@ def is_api_request(metadata: dict) -> bool:
     Determine if a request is an API request (no UI session) vs a UI request.
     
     API requests lack session_id, chat_id, and message_id metadata that UI
-    requests provide via WebSocket connections.
+    requests provide via WebSocket connections. These fields may exist in metadata
+    but be None or empty for API requests.
     """
-    return not (
-        metadata.get("session_id")
-        and metadata.get("chat_id")
-        and metadata.get("message_id")
-    )
+    if not metadata:
+        return True
+    
+    session_id = metadata.get("session_id")
+    chat_id = metadata.get("chat_id")
+    message_id = metadata.get("message_id")
+    
+    # All three must be present and truthy for a UI request
+    return not (session_id and chat_id and message_id)
 
 
 def is_openai_compatible_chunk(data: dict) -> bool:
@@ -116,9 +121,17 @@ def is_openai_compatible_chunk(data: dict) -> bool:
 def is_ui_event(data: dict) -> bool:
     """
     Check if data is a UI-specific event that should be filtered for API clients.
+    Handles both direct format {"type": "status"} and wrapped format {"event": {"type": "status"}}
     """
     if not isinstance(data, dict):
         return False
+    
+    # Check for wrapped event format: {"event": {"type": "..."}}
+    if "event" in data and isinstance(data["event"], dict):
+        event_type = data["event"].get("type", "")
+        return event_type in UI_EVENT_TYPES
+    
+    # Check for direct format: {"type": "..."}
     event_type = data.get("type", "")
     return event_type in UI_EVENT_TYPES
 
@@ -127,7 +140,19 @@ def extract_content_from_ui_event(data: dict) -> Optional[str]:
     """
     Extract text content from UI event if it contains actual token content.
     Returns None if no content should be emitted.
+    Handles both direct and wrapped event formats.
     """
+    # Handle wrapped event format: {"event": {"type": "message", "data": {"content": "..."}}}
+    if "event" in data and isinstance(data["event"], dict):
+        event = data["event"]
+        event_type = event.get("type", "")
+        event_data = event.get("data", {})
+        
+        if event_type == "message" and isinstance(event_data, dict):
+            return event_data.get("content", "")
+        return None
+    
+    # Handle direct format: {"type": "message", "data": {"content": "..."}}
     event_type = data.get("type", "")
     event_data = data.get("data", {})
     
@@ -147,19 +172,24 @@ async def wrap_streaming_response_for_api(
     """
     
     async def filtered_stream():
-        content_buffer = ""
+        log.info(f"[API_FILTER] Starting filtered_stream for model {model_id}")
+        chunk_count = 0
         async for chunk in response.body_iterator:
+            chunk_count += 1
             if isinstance(chunk, bytes):
                 chunk = chunk.decode("utf-8", errors="replace")
             
-            # Handle SSE format
-            for line in chunk.strip().split("\n"):
+            log.debug(f"[API_FILTER] Raw chunk #{chunk_count}: {chunk[:200] if len(chunk) > 200 else chunk}")
+            
+            # Handle SSE format - may have multiple lines in one chunk
+            for line in chunk.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
                     
                 # Handle [DONE] marker
                 if line == "data: [DONE]":
+                    log.info(f"[API_FILTER] Received [DONE] marker")
                     # Emit final chunk with finish_reason
                     finish_chunk = openai_chat_chunk_message_template(model_id, "")
                     finish_chunk["choices"][0]["finish_reason"] = "stop"
@@ -173,27 +203,35 @@ async def wrap_streaming_response_for_api(
                     try:
                         data = json.loads(json_str)
                     except json.JSONDecodeError:
-                        # Not valid JSON, skip
+                        log.debug(f"[API_FILTER] Skipping non-JSON line: {line[:100]}")
                         continue
                     
                     # Check if this is already an OpenAI-compatible chunk
                     if is_openai_compatible_chunk(data):
+                        log.debug(f"[API_FILTER] Passing through OpenAI chunk")
                         yield f"data: {json.dumps(data)}\n\n"
                         continue
                     
-                    # Check if it's a UI event
+                    # Check if it's a UI event (handles both wrapped and direct format)
                     if is_ui_event(data):
                         # Try to extract content from UI events
                         content = extract_content_from_ui_event(data)
                         if content:
+                            log.info(f"[API_FILTER] Extracted content from UI event: {content[:50]}...")
+                            # Emit the content as an OpenAI-compatible chunk
                             chunk_data = openai_chat_chunk_message_template(model_id, content)
                             yield f"data: {json.dumps(chunk_data)}\n\n"
-                        # Otherwise skip UI events
+                        else:
+                            log.debug(f"[API_FILTER] Filtering out UI event: {data.get('event', {}).get('type') or data.get('type')}")
+                        # Skip UI events without content (status updates, etc.)
                         continue
                     
                     # For any other dict data, try to emit as-is if it looks like OpenAI format
                     if "choices" in data:
+                        log.debug(f"[API_FILTER] Passing through data with choices")
                         yield f"data: {json.dumps(data)}\n\n"
+        
+        log.info(f"[API_FILTER] Finished filtered_stream, processed {chunk_count} chunks")
     
     return StreamingResponse(
         filtered_stream(),
@@ -210,19 +248,31 @@ def wrap_response_for_api(response: Any, model_id: str) -> dict:
     if isinstance(response, dict):
         # Already a dict, check if it's OpenAI-compatible
         if "choices" in response and response.get("object") in ["chat.completion", "chat.completion.chunk"]:
+            # Check if the message content contains UI events (pipeline concatenated output)
+            choices = response.get("choices", [])
+            if choices and "message" in choices[0]:
+                msg = choices[0]["message"]
+                content = msg.get("content", "")
+                # Check if content looks like concatenated UI events
+                if isinstance(content, str) and "{'event':" in content:
+                    # Parse and extract actual message content from concatenated events
+                    extracted_content = extract_content_from_concatenated_events(content)
+                    if extracted_content:
+                        choices[0]["message"]["content"] = extracted_content
+            
             # Filter out any UI-specific fields
             clean_response = {
                 "id": response.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}"),
                 "object": "chat.completion",
                 "created": response.get("created", int(time.time())),
                 "model": response.get("model", model_id),
-                "choices": response.get("choices", []),
+                "choices": choices,
             }
             if "usage" in response:
                 clean_response["usage"] = response["usage"]
             return clean_response
         
-        # Check if it's a UI event with content
+        # Check if it's a UI event with content (handles both wrapped and direct format)
         if is_ui_event(response):
             content = extract_content_from_ui_event(response)
             if content:
@@ -255,6 +305,56 @@ def wrap_response_for_api(response: Any, model_id: str) -> dict:
     
     # For other types, return as-is
     return response
+
+
+def extract_content_from_concatenated_events(content: str) -> str:
+    """
+    Extract actual message content from a string that contains concatenated UI events.
+    This handles the case where non-streaming pipeline responses concatenate all events.
+    """
+    import re
+    
+    extracted_content = ""
+    
+    # Try to find event dictionaries in the content string
+    # Pattern to match {'event': {...}} or {"event": {...}}
+    # We look for message events specifically
+    
+    # Simple approach: look for content within message events
+    # Pattern: 'content': 'actual message' or "content": "actual message"
+    
+    # Find all potential JSON-like event objects
+    try:
+        # Split by }{ to separate concatenated dicts (common pattern)
+        parts = re.split(r'\}\s*\{', content)
+        
+        for i, part in enumerate(parts):
+            # Reconstruct the JSON object
+            if i > 0:
+                part = '{' + part
+            if i < len(parts) - 1:
+                part = part + '}'
+            
+            try:
+                # Try to parse as JSON (handle single quotes by replacing)
+                json_str = part.replace("'", '"').replace('False', 'false').replace('True', 'true').replace('None', 'null')
+                data = json.loads(json_str)
+                
+                # Check if this is a message event
+                if isinstance(data, dict) and "event" in data:
+                    event = data["event"]
+                    if isinstance(event, dict) and event.get("type") == "message":
+                        event_data = event.get("data", {})
+                        if isinstance(event_data, dict):
+                            msg_content = event_data.get("content", "")
+                            if msg_content:
+                                extracted_content += msg_content
+            except (json.JSONDecodeError, ValueError):
+                continue
+    except Exception:
+        pass
+    
+    return extracted_content if extracted_content else content
 
 
 async def generate_direct_chat_completion(
@@ -457,11 +557,20 @@ async def generate_chat_completion(
             
             # For API requests (no UI session), ensure OpenAI-compatible response format
             metadata = form_data.get("metadata", {})
-            if is_api_request(metadata):
+            api_request = is_api_request(metadata)
+            log.info(f"[API_FILTER] Pipeline model detected: {model_id}")
+            log.info(f"[API_FILTER] is_api_request: {api_request}")
+            log.info(f"[API_FILTER] metadata: session_id={metadata.get('session_id')}, chat_id={metadata.get('chat_id')}, message_id={metadata.get('message_id')}")
+            log.info(f"[API_FILTER] response type: {type(response)}")
+            
+            if api_request:
+                log.info(f"[API_FILTER] Wrapping response for API client")
                 if isinstance(response, StreamingResponse):
                     return await wrap_streaming_response_for_api(response, model_id)
                 else:
                     return wrap_response_for_api(response, model_id)
+            else:
+                log.info(f"[API_FILTER] NOT wrapping response (UI request)")
             
             return response
         if model.get("owned_by") == "ollama":
