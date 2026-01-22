@@ -146,18 +146,16 @@ _UI_EVENT_TYPES_TO_FILTER = {"status", "citation", "chat:title", "chat:tags", "s
 def filter_api_stream_line(line, model_id="", chunk_id=None):
     """
     Filter/convert a streaming SSE line for API responses.
-    - Filters out UI events (status, citation, etc.)
+    - Filters out UI events (status, citation, sources, etc.)
     - Converts 'message' events to OpenAI chunk format
     - Normalizes chunk IDs on pass-through OpenAI chunks
     Returns the line (possibly converted), or None if filtered.
     """
-    # Handle bytes
     if isinstance(line, bytes):
         line = line.decode("utf-8", "replace")
     if not isinstance(line, str):
         return line
     
-    # Parse SSE data
     data_str = line[5:].strip() if line.startswith("data:") else line.strip()
     if data_str == "[DONE]":
         return line
@@ -167,6 +165,10 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
     except:
         return line
     
+    # Filter raw sources object (e.g. {"sources": [...]})
+    if isinstance(data, dict) and "sources" in data and "choices" not in data:
+        return None
+    
     # Extract event info from wrapped {"event": {...}} or raw {"type": ...}
     evt = data.get("event", data) if isinstance(data.get("event"), dict) else data
     evt_type = evt.get("type") if isinstance(evt, dict) else None
@@ -174,13 +176,14 @@ def filter_api_stream_line(line, model_id="", chunk_id=None):
     if evt_type in _UI_EVENT_TYPES_TO_FILTER:
         return None
     
-    # Get event type from wrapped or raw format
     if evt_type == "message":
         content = evt.get("data", {}).get("content", "")
         return f'data: {json.dumps({"id": chunk_id or f"chatcmpl-{model_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model_id, "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]})}\n\n' if content else None
+    
     if data.get("object") == "chat.completion.chunk" and chunk_id:
         data["id"] = chunk_id
         return f"data: {json.dumps(data)}\n\n"
+    
     return line
 
 
@@ -1885,8 +1888,11 @@ async def process_chat_response(
             return response
         else:
             # Non-streaming API request (no UI session)
-            # Clean concatenated events from response content
+            # Return clean OpenAI-compatible response without sources
             if isinstance(response, dict):
+                # Remove sources from response if present
+                response.pop("sources", None)
+                # Clean concatenated events from response content
                 choices = response.get("choices", [])
                 if choices and len(choices) > 0:
                     content = choices[0].get("message", {}).get("content", "")
@@ -1894,20 +1900,7 @@ async def process_chat_response(
                         cleaned = clean_api_response_content(content)
                         if cleaned != content:
                             response["choices"][0]["message"]["content"] = cleaned
-            
-            if events and isinstance(events, list) and isinstance(response, dict):
-                extra_response = {}
-                for event in events:
-                    if isinstance(event, dict):
-                        extra_response.update(event)
-                    else:
-                        extra_response[event] = True
-
-                response = {
-                    **extra_response,
-                    **response,
-                }
-
+            # Do NOT merge events/sources into API responses - keep them pure OpenAI format
             return response
 
     # Non standard response
