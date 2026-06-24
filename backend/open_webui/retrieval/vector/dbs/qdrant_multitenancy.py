@@ -204,6 +204,7 @@ class QdrantClient(VectorDBBase):
         """
         Create point structs from vector items with tenant ID.
         """
+        log.debug("Creating points for insertion/upsertion. Enable enriched text: {}".format(ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS))
         return [
             models.PointStruct(
                 id=item["id"],

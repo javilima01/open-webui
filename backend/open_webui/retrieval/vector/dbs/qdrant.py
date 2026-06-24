@@ -147,6 +147,7 @@ class QdrantClient(VectorDBBase):
         return next(bm25_embedding_model.query_embed(query)).as_object()
 
     def _create_points(self, items: list[VectorItem]):
+        log.debug("Creating points for insertion/upsertion. Enable enriched text: {}".format(ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS))
         return [
             models.PointStruct(
                 id=item["id"],
