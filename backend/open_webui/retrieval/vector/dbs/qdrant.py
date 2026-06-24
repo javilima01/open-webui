@@ -11,6 +11,7 @@ from qdrant_client.http.models import PointStruct
 from qdrant_client.models import models
 from fastembed import SparseTextEmbedding
 
+from open_webui.retrieval.utils import enrich_single_text
 from open_webui.retrieval.vector.main import (
     VectorDBBase,
     VectorItem,
@@ -151,8 +152,15 @@ class QdrantClient(VectorDBBase):
                 vector={
                     "dense": item["vector"],
                     "sparse": self._get_sparse(item["text"]),
+                    "sparse_enriched": self._get_sparse(
+                        enrich_single_text(item["text"], item["metadata"])
+                    ),
                 },
-                payload={"text": item["text"], "metadata": item["metadata"]},
+                payload={
+                    "text": item["text"],
+                    "text_enriched": enrich_single_text(item["text"], item["metadata"]),
+                    "metadata": item["metadata"],
+                },
             )
             for item in items
         ]
@@ -200,16 +208,18 @@ class QdrantClient(VectorDBBase):
         limit: int,
         bm25_weight: float,
         query_text: str,
+        enable_enriched_texts: bool = False,
     ) -> Optional[SearchResult]:
         # Search for the nearest neighbor items based on the vectors and return 'limit' number of results.
         if limit is None:
             limit = NO_LIMIT  # otherwise qdrant would set limit to 10!
 
+        sparse = "sparse_enriched" if enable_enriched_texts else "sparse"
         prefetch = [
             models.Prefetch(query=vectors[0], using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
-                using="sparse",
+                using=sparse,
                 limit=limit,
             ),
         ]

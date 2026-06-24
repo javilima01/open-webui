@@ -16,6 +16,7 @@ from open_webui.config import (
     QDRANT_TIMEOUT,
     QDRANT_HNSW_M,
 )
+from open_webui.retrieval.utils import enrich_single_text
 from open_webui.retrieval.vector.main import (
     GetResult,
     SearchResult,
@@ -208,9 +209,13 @@ class QdrantClient(VectorDBBase):
                 vector={
                     "dense": item["vector"],
                     "sparse": self._get_sparse(item["text"]),
+                    "sparse_enriched": self._get_sparse(
+                        enrich_single_text(item["text"], item["metadata"])
+                    ),
                 },
                 payload={
                     "text": item["text"],
+                    "text_enriched": enrich_single_text(item["text"], item["metadata"]),
                     "metadata": item["metadata"],
                     TENANT_ID_FIELD: tenant_id,
                 },
@@ -314,6 +319,7 @@ class QdrantClient(VectorDBBase):
         limit: int,
         bm25_weight: float,
         query_text: str,
+        enable_enriched_texts: bool = False,
     ) -> Optional[SearchResult]:
         if not self.client or not vectors:
             return None
@@ -323,11 +329,12 @@ class QdrantClient(VectorDBBase):
             return None
         tenant_filter = _tenant_filter(tenant_id)
 
+        sparse = "sparse_enriched" if enable_enriched_texts else "sparse"
         prefetch = [
             models.Prefetch(query=vectors[0], using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
-                using="sparse",
+                using=sparse,
                 limit=limit,
             ),
         ]

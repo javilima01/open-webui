@@ -101,6 +101,7 @@ class VectorSearchRetriever(BaseRetriever):
     embedding_function: Any
     top_k: int
     bm25_weight: float = 0.0
+    enable_enriched_texts: bool = False
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
@@ -130,6 +131,7 @@ class VectorSearchRetriever(BaseRetriever):
                 limit=self.top_k,
                 bm25_weight=self.bm25_weight,
                 query_text=query,
+                enable_enriched_texts=self.enable_enriched_texts,
             )
         else:
             result = VECTOR_DB_CLIENT.search(
@@ -189,42 +191,31 @@ def get_doc(collection_name: str, user: UserModel = None):
         raise e
 
 
+def enrich_single_text(text: str, metadata: dict) -> str:
+    parts = [text]
+    if metadata.get("name"):
+        filename = metadata["name"]
+        filename_tokens = (
+            filename.replace("_", " ").replace("-", " ").replace(".", " ")
+        )
+        parts.append(f"Filename: {filename} {filename_tokens} {filename_tokens}")
+    if metadata.get("title"):
+        parts.append(f"Title: {metadata['title']}")
+    if metadata.get("headings") and isinstance(metadata["headings"], list):
+        headings = " > ".join(str(h) for h in metadata["headings"])
+        parts.append(f"Section: {headings}")
+    if metadata.get("source"):
+        parts.append(f"Source: {metadata['source']}")
+    if metadata.get("snippet"):
+        parts.append(f"Snippet: {metadata['snippet']}")
+    return " ".join(parts)
+
+
 def get_enriched_texts(collection_result: GetResult) -> list[str]:
-    enriched_texts = []
-    for idx, text in enumerate(collection_result.documents[0]):
-        metadata = collection_result.metadatas[0][idx]
-        metadata_parts = [text]
-
-        # Add filename (repeat twice for extra weight in BM25 scoring)
-        if metadata.get("name"):
-            filename = metadata["name"]
-            filename_tokens = (
-                filename.replace("_", " ").replace("-", " ").replace(".", " ")
-            )
-            metadata_parts.append(
-                f"Filename: {filename} {filename_tokens} {filename_tokens}"
-            )
-
-        # Add title if available
-        if metadata.get("title"):
-            metadata_parts.append(f"Title: {metadata['title']}")
-
-        # Add document section headings if available (from markdown splitter)
-        if metadata.get("headings") and isinstance(metadata["headings"], list):
-            headings = " > ".join(str(h) for h in metadata["headings"])
-            metadata_parts.append(f"Section: {headings}")
-
-        # Add source URL/path if available
-        if metadata.get("source"):
-            metadata_parts.append(f"Source: {metadata['source']}")
-
-        # Add snippet for web search results
-        if metadata.get("snippet"):
-            metadata_parts.append(f"Snippet: {metadata['snippet']}")
-
-        enriched_texts.append(" ".join(metadata_parts))
-
-    return enriched_texts
+    return [
+        enrich_single_text(text, collection_result.metadatas[0][idx])
+        for idx, text in enumerate(collection_result.documents[0])
+    ]
 
 
 async def query_doc_with_hybrid_search(
@@ -246,6 +237,7 @@ async def query_doc_with_hybrid_search(
             embedding_function=embedding_function,
             top_k=k,
             bm25_weight=hybrid_bm25_weight,
+            enable_enriched_texts=enable_enriched_texts,
         )
 
         ensemble_retriever = EnsembleRetriever(
