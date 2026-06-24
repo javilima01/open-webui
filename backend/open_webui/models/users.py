@@ -112,6 +112,15 @@ class UserModel(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    def simplified(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "name": self.name,
+            "role": self.role,
+            "username": self.username,
+        }
+
     @model_validator(mode="after")
     def set_profile_image_url(self):
         if not self.profile_image_url:

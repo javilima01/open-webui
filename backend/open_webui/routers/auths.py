@@ -523,6 +523,7 @@ async def ldap_auth(
                         name=cn,
                         role=role,
                         db=db,
+                        username=form_data.user.lower(),
                     )
 
                     if not user:
@@ -547,6 +548,9 @@ async def ldap_auth(
             user = Auths.authenticate_user_by_email(email, db=db)
 
             if user:
+                # Update username of the user
+                Users.update_user_by_id(id=user.id, updated={"username": form_data.user.lower()}, db=db)
+
                 if (
                     user.role != "admin"
                     and ENABLE_LDAP_GROUP_MANAGEMENT

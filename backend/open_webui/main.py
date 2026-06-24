@@ -537,7 +537,11 @@ from open_webui.utils.auth import (
     get_verified_user,
     create_admin_user,
 )
-from open_webui.utils.plugin import install_tool_and_function_dependencies
+from open_webui.utils.plugin import (
+    install_tool_and_function_dependencies,
+    load_tool_module_by_id,
+)
+from open_webui.models.tools import Tools
 from open_webui.utils.oauth import (
     get_oauth_client_info_with_dynamic_client_registration,
     encrypt_data,
@@ -626,6 +630,14 @@ async def lifespan(app: FastAPI):
     # when the first user lands on the / route.
     log.info("Installing external dependencies of functions and tools...")
     install_tool_and_function_dependencies()
+
+    log.info("Pre-loading tool modules...")
+    for tool in Tools.get_tools():
+        try:
+            tool_module, _ = load_tool_module_by_id(tool.id, content=tool.content)
+            app.state.TOOLS[tool.id] = tool_module
+        except Exception as e:
+            log.warning(f"Failed to pre-load tool {tool.id}: {e}")
 
     app.state.redis = get_redis_connection(
         redis_url=REDIS_URL,
