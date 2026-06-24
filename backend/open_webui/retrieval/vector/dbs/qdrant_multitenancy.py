@@ -16,12 +16,12 @@ from open_webui.config import (
     QDRANT_TIMEOUT,
     QDRANT_HNSW_M,
 )
-from open_webui.retrieval.utils import enrich_single_text
 from open_webui.retrieval.vector.main import (
     GetResult,
     SearchResult,
     VectorDBBase,
     VectorItem,
+    enrich_single_text
 )
 from qdrant_client import QdrantClient as Qclient
 from qdrant_client.models import models

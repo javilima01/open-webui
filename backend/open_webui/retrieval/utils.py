@@ -31,7 +31,6 @@ from open_webui.models.chats import Chats
 from open_webui.models.notes import Notes
 from open_webui.models.access_grants import AccessGrants
 
-from open_webui.retrieval.vector.main import GetResult
 from open_webui.utils.headers import include_user_info_headers
 from open_webui.utils.misc import get_message_list
 
@@ -189,34 +188,6 @@ def get_doc(collection_name: str, user: UserModel = None):
     except Exception as e:
         log.exception(f"Error getting doc {collection_name}: {e}")
         raise e
-
-
-def enrich_single_text(text: str, metadata: dict) -> str:
-    parts = [text]
-    if metadata.get("name"):
-        filename = metadata["name"]
-        filename_tokens = (
-            filename.replace("_", " ").replace("-", " ").replace(".", " ")
-        )
-        parts.append(f"Filename: {filename} {filename_tokens} {filename_tokens}")
-    if metadata.get("title"):
-        parts.append(f"Title: {metadata['title']}")
-    if metadata.get("headings") and isinstance(metadata["headings"], list):
-        headings = " > ".join(str(h) for h in metadata["headings"])
-        parts.append(f"Section: {headings}")
-    if metadata.get("source"):
-        parts.append(f"Source: {metadata['source']}")
-    if metadata.get("snippet"):
-        parts.append(f"Snippet: {metadata['snippet']}")
-    return " ".join(parts)
-
-
-def get_enriched_texts(collection_result: GetResult) -> list[str]:
-    return [
-        enrich_single_text(text, collection_result.metadatas[0][idx])
-        for idx, text in enumerate(collection_result.documents[0])
-    ]
-
 
 async def query_doc_with_hybrid_search(
     collection_name: str,

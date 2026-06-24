@@ -11,12 +11,12 @@ from qdrant_client.http.models import PointStruct
 from qdrant_client.models import models
 from fastembed import SparseTextEmbedding
 
-from open_webui.retrieval.utils import enrich_single_text
 from open_webui.retrieval.vector.main import (
     VectorDBBase,
     VectorItem,
     SearchResult,
     GetResult,
+    enrich_single_text
 )
 from open_webui.config import (
     QDRANT_URI,
