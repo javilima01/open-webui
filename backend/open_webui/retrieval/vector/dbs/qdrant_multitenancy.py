@@ -15,13 +15,14 @@ from open_webui.config import (
     QDRANT_COLLECTION_PREFIX,
     QDRANT_TIMEOUT,
     QDRANT_HNSW_M,
+    ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS,
 )
 from open_webui.retrieval.vector.main import (
     GetResult,
     SearchResult,
     VectorDBBase,
     VectorItem,
-    enrich_single_text
+    enrich_single_text,
 )
 from qdrant_client import QdrantClient as Qclient
 from qdrant_client.models import models
@@ -208,14 +209,14 @@ class QdrantClient(VectorDBBase):
                 id=item["id"],
                 vector={
                     "dense": item["vector"],
-                    "sparse": self._get_sparse(item["text"]),
-                    "sparse_enriched": self._get_sparse(
-                        enrich_single_text(item["text"], item["metadata"])
+                    "sparse": self._get_sparse(
+                        item["text"]
+                        if not ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS
+                        else enrich_single_text(item["text"], item["metadata"])
                     ),
                 },
                 payload={
                     "text": item["text"],
-                    "text_enriched": enrich_single_text(item["text"], item["metadata"]),
                     "metadata": item["metadata"],
                     TENANT_ID_FIELD: tenant_id,
                 },
@@ -329,12 +330,11 @@ class QdrantClient(VectorDBBase):
             return None
         tenant_filter = _tenant_filter(tenant_id)
 
-        sparse = "sparse_enriched" if enable_enriched_texts else "sparse"
         prefetch = [
             models.Prefetch(query=vectors[0], using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
-                using=sparse,
+                using="sparse",
                 limit=limit,
             ),
         ]

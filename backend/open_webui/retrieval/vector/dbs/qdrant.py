@@ -16,7 +16,7 @@ from open_webui.retrieval.vector.main import (
     VectorItem,
     SearchResult,
     GetResult,
-    enrich_single_text
+    enrich_single_text,
 )
 from open_webui.config import (
     QDRANT_URI,
@@ -27,6 +27,7 @@ from open_webui.config import (
     QDRANT_COLLECTION_PREFIX,
     QDRANT_TIMEOUT,
     QDRANT_HNSW_M,
+    ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS,
 )
 
 NO_LIMIT = 999999999
@@ -151,14 +152,14 @@ class QdrantClient(VectorDBBase):
                 id=item["id"],
                 vector={
                     "dense": item["vector"],
-                    "sparse": self._get_sparse(item["text"]),
-                    "sparse_enriched": self._get_sparse(
-                        enrich_single_text(item["text"], item["metadata"])
+                    "sparse": self._get_sparse(
+                        item["text"]
+                        if not ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS
+                        else enrich_single_text(item["text"], item["metadata"])
                     ),
                 },
                 payload={
                     "text": item["text"],
-                    "text_enriched": enrich_single_text(item["text"], item["metadata"]),
                     "metadata": item["metadata"],
                 },
             )
@@ -214,12 +215,11 @@ class QdrantClient(VectorDBBase):
         if limit is None:
             limit = NO_LIMIT  # otherwise qdrant would set limit to 10!
 
-        sparse = "sparse_enriched" if enable_enriched_texts else "sparse"
         prefetch = [
             models.Prefetch(query=vectors[0], using="dense", limit=limit),
             models.Prefetch(
                 query=models.SparseVector(**self._get_sparse(query_text)),
-                using=sparse,
+                using="sparse",
                 limit=limit,
             ),
         ]
