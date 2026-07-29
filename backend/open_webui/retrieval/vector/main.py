@@ -17,6 +17,24 @@ class GetResult(BaseModel):
     metadatas: Optional[List[List[Any]]]
 
 
+def enrich_single_text(text: str, metadata: dict) -> str:
+    parts = [text]
+    if metadata.get('name'):
+        filename = metadata['name']
+        filename_tokens = filename.replace('_', ' ').replace('-', ' ').replace('.', ' ')
+        parts.append(f'Filename: {filename} {filename_tokens} {filename_tokens}')
+    if metadata.get('title'):
+        parts.append(f'Title: {metadata["title"]}')
+    if metadata.get('headings') and isinstance(metadata['headings'], list):
+        headings = ' > '.join(str(h) for h in metadata['headings'])
+        parts.append(f'Section: {headings}')
+    if metadata.get('source'):
+        parts.append(f'Source: {metadata["source"]}')
+    if metadata.get('snippet'):
+        parts.append(f'Snippet: {metadata["snippet"]}')
+    return ' '.join(parts)
+
+
 class SearchResult(GetResult):
     distances: Optional[List[List[float | int]]]
 

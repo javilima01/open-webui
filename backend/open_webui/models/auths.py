@@ -109,6 +109,7 @@ class AuthsTable:
         role: str = 'pending',
         oauth: dict | None = None,
         db: AsyncSession | None = None,
+        username: str | None = None,
     ) -> UserModel | None:
         """Create an Auth + User pair inside a single transaction."""
         async with get_async_db_context(db) as session:
@@ -132,6 +133,7 @@ class AuthsTable:
                 role,
                 oauth=oauth,
                 db=session,
+                username=username,
             )
             # persist both records and reload generated defaults
             await session.commit()

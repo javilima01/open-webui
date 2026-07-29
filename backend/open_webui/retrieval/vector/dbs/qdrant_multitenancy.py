@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import grpc
 from open_webui.config import (
+    ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS,
     QDRANT_API_KEY,
     QDRANT_COLLECTION_PREFIX,
     QDRANT_GRPC_PORT,
@@ -22,17 +23,23 @@ from open_webui.retrieval.vector.main import (
     SearchResult,
     VectorDBBase,
     VectorItem,
+    enrich_single_text,
 )
 from qdrant_client import QdrantClient as Qclient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import PointStruct
 from qdrant_client.models import models
+from fastembed import SparseTextEmbedding
 
 NO_LIMIT = 999999999
 TENANT_ID_FIELD = 'tenant_id'
 DEFAULT_DIMENSION = 384
 
 log = logging.getLogger(__name__)
+
+bm25_embedding_model = SparseTextEmbedding(
+    'Qdrant/bm25', specific_model_path='/tmp/fastembed_cache/models--Qdrant--bm25'
+)
 
 
 def _tenant_filter(tenant_id: str) -> models.FieldCondition:
@@ -136,11 +143,19 @@ class QdrantClient(VectorDBBase):
         """
         self.client.create_collection(
             collection_name=mt_collection_name,
-            vectors_config=models.VectorParams(
-                size=dimension,
-                distance=models.Distance.COSINE,
-                on_disk=self.QDRANT_ON_DISK,
-            ),
+            vectors_config={
+                'dense': models.VectorParams(
+                    size=dimension,
+                    distance=models.Distance.COSINE,
+                    on_disk=self.QDRANT_ON_DISK,
+                )
+            },
+            sparse_vectors_config={
+                'sparse': models.SparseVectorParams(
+                    modifier=models.Modifier.IDF,
+                    index=models.SparseIndexParams(on_disk=self.QDRANT_ON_DISK),
+                )
+            },
             # Disable global index building due to multitenancy
             # For more details https://qdrant.tech/documentation/guides/multiple-partitions/#calibrate-performance
             hnsw_config=models.HnswConfigDiff(
@@ -170,14 +185,25 @@ class QdrantClient(VectorDBBase):
                 ),
             )
 
+    def _get_sparse(self, query: str):
+        return next(bm25_embedding_model.query_embed(query)).as_object()
+
     def _create_points(self, items: List[VectorItem], tenant_id: str) -> List[PointStruct]:
         """
         Create point structs from vector items with tenant ID.
         """
+        log.debug(f'Creating points. Enriched text: {ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS}')
         return [
             PointStruct(
                 id=item['id'],
-                vector=item['vector'],
+                vector={
+                    'dense': item['vector'],
+                    'sparse': self._get_sparse(
+                        item['text']
+                        if not ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS
+                        else enrich_single_text(item['text'], item['metadata'])
+                    ),
+                },
                 payload={
                     'text': item['text'],
                     'metadata': item['metadata'],
@@ -262,6 +288,7 @@ class QdrantClient(VectorDBBase):
         query_response = self.client.query_points(
             collection_name=mt_collection,
             query=vectors[0],
+            using='dense',
             limit=limit,
             query_filter=models.Filter(must=[tenant_filter]),
         )
@@ -271,6 +298,62 @@ class QdrantClient(VectorDBBase):
             documents=get_result.documents,
             metadatas=get_result.metadatas,
             distances=[[(point.score + 1.0) / 2.0 for point in query_response.points]],
+        )
+
+    def hybrid_search(
+        self,
+        collection_name: str,
+        query: str,
+        vectors: List[List[float | int]],
+        filter: Optional[Dict] = None,
+        limit: int = 10,
+        hybrid_bm25_weight: float = 0.5,
+    ) -> Optional[SearchResult]:
+        """Server-side hybrid (dense + BM25 sparse) search with tenant isolation, fused with RRF."""
+        if not self.client:
+            return None
+        mt_collection, tenant_id = self._get_collection_and_tenant_id(collection_name)
+        if not self.client.collection_exists(collection_name=mt_collection):
+            log.debug(f"Collection {mt_collection} doesn't exist, search returns None")
+            return None
+        if limit is None:
+            limit = NO_LIMIT
+
+        must_conditions = [_tenant_filter(tenant_id)]
+        if filter:
+            must_conditions += [_metadata_filter(k, v) for k, v in filter.items()]
+        query_filter = models.Filter(must=must_conditions)
+
+        prefetch = []
+        # Upstream sends vectors=[] when hybrid_bm25_weight >= 1 (sparse-only).
+        if vectors:
+            prefetch.append(
+                models.Prefetch(query=vectors[0], using='dense', limit=limit, filter=query_filter)
+            )
+        prefetch.append(
+            models.Prefetch(
+                query=models.SparseVector(**self._get_sparse(query)),
+                using='sparse',
+                limit=limit,
+                filter=query_filter,
+            )
+        )
+
+        query_response = self.client.query_points(
+            collection_name=mt_collection,
+            prefetch=prefetch,
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=limit,
+            query_filter=query_filter,
+        )
+
+        points = query_response.points[:limit]
+        get_result = self._result_to_get_result(points)
+        return SearchResult(
+            ids=get_result.ids,
+            documents=get_result.documents,
+            metadatas=get_result.metadatas,
+            distances=[[(point.score + 1.0) / 2.0 for point in points]],
         )
 
     def query(self, collection_name: str, filter: Dict[str, Any], limit: Optional[int] = None):

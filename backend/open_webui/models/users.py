@@ -118,6 +118,15 @@ class UserModel(BaseModel):
         from_attributes=True,
     )
 
+    def simplified(self):
+        return {
+            'id': self.id,
+            'email': self.email,
+            'name': self.name,
+            'role': self.role,
+            'username': self.username,
+        }
+
     # validation schema logic
     # --- model validators ---
     @model_validator(mode='after')

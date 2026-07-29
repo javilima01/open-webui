@@ -591,6 +591,7 @@ async def ldap_auth(
                         name=cn,
                         role=await Config.get('ui.default_user_role'),
                         db=db,
+                        username=form_data.user.lower(),
                     )
 
                     if not user:
@@ -626,6 +627,9 @@ async def ldap_auth(
             user = await Auths.authenticate_user_by_email(email, db=db)
 
             if user:
+                # Update username of the user to match the current LDAP handle
+                await Users.update_user_by_id(user.id, {'username': form_data.user.lower()}, db=db)
+
                 if ENABLE_LDAP_GROUP_MANAGEMENT and user_groups:
                     if ENABLE_LDAP_GROUP_CREATION:
                         await Groups.create_groups_by_group_names(user.id, user_groups, db=db)
