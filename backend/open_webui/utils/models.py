@@ -19,7 +19,7 @@ from open_webui.models.models import Models
 from open_webui.models.users import UserModel
 from open_webui.routers import ollama, openai
 from open_webui.socket.utils import RedisDict
-from open_webui.utils.access_control import has_access, has_base_model_access
+from open_webui.utils.access_control import has_access
 from open_webui.utils.plugin import (
     get_functions_cache,
     get_function_module_from_cache,
@@ -408,10 +408,6 @@ async def check_model_access(user, model, db=None):
                 db=db,
             )
         ):
-            raise Exception('Model not found')
-
-        # Enforce access on chained base models
-        if not await has_base_model_access(user.id, model_info, db=db):
             raise Exception('Model not found')
 
 
