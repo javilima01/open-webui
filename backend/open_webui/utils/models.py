@@ -20,7 +20,7 @@ from open_webui.utils.chat_variables import get_chat_variables_schema
 from open_webui.models.users import UserModel
 from open_webui.routers import ollama, openai
 from open_webui.socket.utils import RedisDict
-from open_webui.utils.access_control import has_access, has_base_model_access
+from open_webui.utils.access_control import has_access
 from open_webui.utils.plugin import (
     get_functions_cache,
     get_function_module_from_cache,
@@ -462,12 +462,6 @@ async def check_model_access(user, model, model_info=None, db=None):
                 user_group_ids=user_group_ids,
                 db=db,
             )
-        ):
-            raise Exception('Model not found')
-
-        # Enforce access on chained base models
-        if not await has_base_model_access(
-            user.id, model_info, user_role=user.role, user_group_ids=user_group_ids, db=db
         ):
             raise Exception('Model not found')
 

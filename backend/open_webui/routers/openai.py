@@ -1253,12 +1253,7 @@ async def generate_chat_completion(
 
     # Add user info to the payload if the model is a pipeline
     if 'pipeline' in model and model.get('pipeline'):
-        payload['user'] = {
-            'name': user.name,
-            'id': user.id,
-            'email': user.email,
-            'role': user.role,
-        }
+        payload['user'] = user.simplified()
 
     # Check if model is a reasoning model that needs special handling
     if is_openai_new_model(payload['model']):
