@@ -193,86 +193,6 @@ DEFAULT_SOLUTION_TAGS = [('<|begin_of_solution|>', '<|end_of_solution|>')]
 DEFAULT_CODE_INTERPRETER_TAGS = [('<code_interpreter>', '</code_interpreter>')]
 
 
-# UI event types that should be filtered from direct-API responses
-_UI_EVENT_TYPES_TO_FILTER = {'status', 'citation', 'chat:title', 'chat:tags', 'source', 'sources'}
-
-
-def filter_api_stream_line(line, model_id='', chunk_id=None, allow_sources=False):
-    """Filter UI events out of an SSE line and convert 'message' events to
-    OpenAI chunks. Returns the (possibly converted) line, or None if filtered.
-    When allow_sources is set (JWT callers), RAG sources are kept and wrapped
-    in a valid chat.completion.chunk envelope instead of being dropped."""
-    if isinstance(line, bytes):
-        line = line.decode('utf-8', 'replace')
-    if not isinstance(line, str):
-        return line
-
-    data_str = line[5:].strip() if line.startswith('data:') else line.strip()
-    if data_str == '[DONE]':
-        return line
-
-    try:
-        data = json.loads(data_str)
-    except Exception:
-        return line
-
-    if isinstance(data, dict) and 'sources' in data and 'choices' not in data:
-        if not allow_sources:
-            return None
-        # Valid chunk envelope so OpenAI SDKs can parse the line; empty delta,
-        # sources ride alongside.
-        return f'data: {json.dumps({"id": chunk_id or f"chatcmpl-{model_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model_id, "choices": [{"index": 0, "delta": {}, "finish_reason": None}], "sources": data["sources"]})}\n\n'
-
-    # Event may be wrapped as {"event": {...}} or raw {"type": ...}
-    evt = data.get('event', data) if isinstance(data.get('event'), dict) else data
-    evt_type = evt.get('type') if isinstance(evt, dict) else None
-
-    if evt_type in _UI_EVENT_TYPES_TO_FILTER:
-        return None
-
-    if evt_type == 'message':
-        content = evt.get('data', {}).get('content', '')
-        if not content:
-            return None
-        return f'data: {json.dumps({"id": chunk_id or f"chatcmpl-{model_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model_id, "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]})}\n\n'
-
-    if data.get('object') == 'chat.completion.chunk' and chunk_id:
-        data['id'] = chunk_id
-        return f'data: {json.dumps(data)}\n\n'
-
-    return line
-
-
-def clean_api_response_content(content_str):
-    """Strip concatenated event objects from response content, keeping only 'message' event text."""
-    if not isinstance(content_str, str) or ("{'event':" not in content_str and '{"event":' not in content_str):
-        return content_str
-
-    extracted, depth, start = [], 0, -1
-    for i, c in enumerate(content_str):
-        if c == '{':
-            start = i if depth == 0 else start
-            depth += 1
-        elif c == '}':
-            depth -= 1
-            if depth == 0 and start >= 0:
-                s = content_str[start:i + 1]
-                try:
-                    obj = json.loads(s)
-                except Exception:
-                    if "'type': 'message'" in s:
-                        m = re.search(r"'content':\s*'((?:[^'\\]|\\.)*)'", s)
-                        if m:
-                            extracted.append(m.group(1).replace("\\'", "'"))
-                    start = -1
-                    continue
-                evt = obj.get('event', obj)
-                if isinstance(evt, dict) and evt.get('type') == 'message':
-                    extracted.append(evt.get('data', {}).get('content', ''))
-                start = -1
-    return ''.join(extracted) or content_str
-
-
 def _start_tag_pattern(start_tag: str) -> str:
     if start_tag.startswith('<') and start_tag.endswith('>'):
         return rf'<{re.escape(start_tag[1:-1])}(\s.*?)?>'
@@ -3821,22 +3741,8 @@ async def non_streaming_chat_response_handler(response, ctx):
         }
         await outlet_filter_handler(ctx)
 
-    # API request (no UI session): return a clean OpenAI response without UI events.
-    # JWT callers keep the RAG sources; API-key (sk-) callers stay fully filtered.
-    if isinstance(response_data, dict):
-        if getattr(request.state, 'auth_type', None) == 'jwt':
-            response_data = merge_events_into_response(
-                response_data, [e for e in events if isinstance(e, dict) and 'sources' in e]
-            )
-        else:
-            response_data.pop('sources', None)
-        if choices:
-            api_content = choices[0].get('message', {}).get('content', '')
-            if api_content and isinstance(api_content, str):
-                cleaned = clean_api_response_content(api_content)
-                if cleaned != api_content:
-                    response_data['choices'][0]['message']['content'] = cleaned
-        response = build_response_object(response, response_data)
+    if isinstance(response, dict):
+        response = merge_events_into_response(response_data, events)
 
     return response
 
@@ -5690,13 +5596,11 @@ async def streaming_chat_response_handler(response, ctx):
         return await response_handler(response, events)
 
     else:
-        # Fallback to the original response (API requests without UI session)
-        api_model_id = form_data.get('model', '')
-        chunk_id = f'chatcmpl-{api_model_id}-{int(time.time())}'
-        # JWT callers get RAG sources; API-key (sk-) callers stay fully filtered.
-        allow_sources = getattr(request.state, 'auth_type', None) == 'jwt'
-
+        # Fallback to the original response
         async def stream_wrapper(original_generator, events):
+            def wrap_item(item):
+                return f'data: {item}\n\n'
+
             assistant_message = {}
             filter_context = FilterContext()
             has_api_outlet_filters = ENABLE_API_OUTLET_FILTERS and bool(filter_functions)
@@ -5721,11 +5625,7 @@ async def streaming_chat_response_handler(response, ctx):
                 )
 
                 if event:
-                    line = filter_api_stream_line(
-                        f'data: {JSONCodec.dumps(event)}', api_model_id, chunk_id, allow_sources
-                    )
-                    if line:
-                        yield line
+                    yield wrap_item(JSONCodec.dumps(event))
 
             async for data in original_generator:
                 data, _ = await process_filter_functions(
@@ -5740,9 +5640,7 @@ async def streaming_chat_response_handler(response, ctx):
                 if data:
                     if has_api_outlet_filters:
                         update_assistant_message_from_stream(assistant_message, data)
-                    line = filter_api_stream_line(data, api_model_id, chunk_id, allow_sources)
-                    if line:
-                        yield line
+                    yield data
 
             if has_api_outlet_filters and assistant_message:
                 ctx['assistant_message'] = assistant_message
