@@ -1536,6 +1536,95 @@ async def embeddings(request: Request, form_data: dict, user):
             await cleanup_response(r)
 
 
+async def rerank(request: Request, form_data: dict, user):
+    """
+    Calls the reranking endpoint for OpenAI-compatible providers.
+
+    Args:
+        request (Request): The FastAPI request context.
+        form_data (dict): OpenAI-compatible reranking payload
+            (e.g., {"model": "...", "query": "...", "documents": [...], "top_n": n}).
+        user (UserModel): The authenticated user.
+
+    Returns:
+        dict: OpenAI-compatible rerank response.
+    """
+    idx = 0
+    # Prepare payload/body
+    body = json.dumps(form_data)
+    # Find correct backend url/key based on model
+    model_id = form_data.get('model')
+    # Check if model is already in app state cache to avoid expensive get_all_models() call
+    models = request.app.state.OPENAI_MODELS
+    if not models or model_id not in models:
+        await get_all_models(request, user=user)
+        models = request.app.state.OPENAI_MODELS
+    if model_id in models:
+        idx = models[model_id]['urlIdx']
+
+    url, key, api_config = await get_openai_connection(idx)
+
+    r = None
+    streaming = False
+
+    headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
+
+    rerank_url = f'{url}/rerank'
+    requested_model = form_data.get('model')
+
+    try:
+        session = await get_session()
+        r = await session.request(
+            method='POST',
+            url=rerank_url,
+            data=body,
+            headers=headers,
+            cookies=cookies,
+            timeout=get_client_timeout(),
+            ssl=AIOHTTP_CLIENT_SESSION_SSL,
+        )
+
+        if 'text/event-stream' in r.headers.get('Content-Type', ''):
+            streaming = True
+            return StreamingResponse(
+                stream_wrapper(r, passthrough=True),
+                status_code=r.status,
+                headers=_clean_proxy_headers(r.headers),
+            )
+        else:
+            try:
+                response_data = await r.json(loads=JSONCodec.loads)
+            except Exception:
+                response_data = await r.text()
+
+            if r.status >= 400:
+                await publish_model_provider_request_failed(
+                    request,
+                    actor=user,
+                    provider='openai-compatible',
+                    base_url=url,
+                    api_key=key,
+                    status=r.status,
+                    requested_model=requested_model,
+                    upstream_error=response_data,
+                )
+                if isinstance(response_data, (dict, list)):
+                    return JSONResponse(status_code=r.status, content=response_data)
+                else:
+                    return PlainTextResponse(status_code=r.status, content=response_data)
+
+            return response_data
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=r.status if r else 500,
+            detail=ERROR_MESSAGES.SERVER_CONNECTION_ERROR,
+        )
+    finally:
+        if not streaming:
+            await cleanup_response(r)
+
+
 class ResponsesForm(BaseModel):
     model_config = ConfigDict(extra='allow')
 
