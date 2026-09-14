@@ -228,7 +228,7 @@ from open_webui.utils.chat_id import (
 from open_webui.utils.chat_variables import (
     normalize_chat_variables,
 )
-from open_webui.utils.embeddings import generate_embeddings
+from open_webui.utils.embeddings import generate_embeddings, generate_reranking
 from open_webui.utils.json_response import apply_orjson_http_json
 from open_webui.utils.logger import start_logger
 from open_webui.utils.middleware import (
@@ -1036,6 +1036,35 @@ async def embeddings(request: Request, form_data: dict, user=Depends(get_verifie
         await get_all_models(request, user=user)
     # Use generic dispatcher in utils.embeddings
     return await generate_embeddings(request, form_data, user)
+
+
+##################################
+# Reranking
+##################################
+
+
+@app.post('/api/rerank')
+@app.post('/api/v1/rerank')  # Experimental: Compatibility with OpenAI API
+async def rerank(request: Request, form_data: dict, user=Depends(get_verified_user)):
+    """
+    OpenAI-compatible reranking endpoint.
+
+    This handler dispatches to the configured reranking backend (external
+    OpenAI-compatible reranker, sentence-transformers cross-encoder, etc.) and
+    returns an OpenAI-compatible (Jina/Cohere-style) rerank response.
+
+    Args:
+        request (Request): Request context.
+        form_data (dict): OpenAI-like payload (e.g., {"model": "...", "query": "...", "documents": [...], "top_n": n}).
+        user (UserModel): Authenticated user.
+
+    Returns:
+        dict: OpenAI-compatible rerank response.
+    """
+    # Make sure models are loaded in app state
+    if not request.app.state.MODELS:
+        await get_all_models(request, user=user)
+    return await generate_reranking(request, form_data, user)
 
 
 async def _set_direct_model(request: Request, model_item: dict, user) -> None:

@@ -13,6 +13,7 @@ from open_webui.routers.ollama import (
     embed as ollama_embed,
 )
 from open_webui.routers.openai import embeddings as openai_embeddings
+from open_webui.routers.openai import rerank as openai_rerank
 from open_webui.utils.models import check_model_access
 from open_webui.utils.payload import convert_embed_payload_openai_to_ollama
 from open_webui.utils.response import convert_embedding_response_ollama_to_openai
@@ -82,6 +83,61 @@ async def generate_embeddings(
 
     # Default: OpenAI or compatible backend
     return await openai_embeddings(
+        request=request,
+        form_data=form_data,
+        user=user,
+    )
+
+
+async def generate_reranking(request: Request, form_data: dict, user: UserModel, bypass_filter: bool = False):
+    """
+    Dispatch and handle reranking generation based on the configured backend.
+
+    Accepts an OpenAI-compatible (Jina/Cohere-style) reranking payload and
+    returns an OpenAI-compatible rerank response.
+
+    Args:
+        request (Request): The FastAPI request context.
+        form_data (dict): The input data sent to the endpoint
+            (e.g., {"model": "...", "query": "...", "documents": [...], "top_n": n}).
+        user (UserModel): The authenticated user.
+
+    Returns:
+        dict: An OpenAI-compatible rerank response.
+    """
+    if BYPASS_MODEL_ACCESS_CONTROL:
+        bypass_filter = True
+
+        # Attach extra metadata from request.state if present
+    if hasattr(request.state, 'metadata'):
+        if 'metadata' not in form_data:
+            form_data['metadata'] = request.state.metadata
+        else:
+            form_data['metadata'] = {
+                **form_data['metadata'],
+                **request.state.metadata,
+            }
+
+    # If "direct" flag present, use only that model
+    if getattr(request.state, 'direct', False) and hasattr(request.state, 'model'):
+        models = {
+            request.state.model['id']: request.state.model,
+        }
+    else:
+        models = request.app.state.MODELS
+
+    model_id = form_data.get('model')
+    if model_id not in models:
+        raise Exception('Model not found')
+    model = models[model_id]
+
+    # Access filtering
+    if not getattr(request.state, 'direct', False):
+        if not bypass_filter and user.role == 'user':
+            await check_model_access(user, model)
+
+    # Default: OpenAI or compatible backend
+    return await openai_rerank(
         request=request,
         form_data=form_data,
         user=user,
