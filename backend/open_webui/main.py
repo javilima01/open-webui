@@ -1592,7 +1592,7 @@ async def chat_completion(
                         detail = detail.get('message', detail.get('detail', str(detail)))
                 except Exception:
                     detail = f'Provider returned HTTP {response.status_code}'
-                raise Exception(detail)
+                raise HTTPException(status_code=response.status_code, detail=detail)
 
             ctx = await build_chat_response_context(request, form_data, user, model, metadata, tasks, events)
 
@@ -1611,6 +1611,7 @@ async def chat_completion(
                 pass
             raise  # re-raise to ensure proper task cancellation handling
         except Exception as e:
+            error_status = e.status_code if isinstance(e, HTTPException) else status.HTTP_400_BAD_REQUEST
             error_detail = e.detail if isinstance(e, HTTPException) else str(e)
             log.error('Error processing chat payload: %s', error_detail)
             if metadata.get('chat_id') and metadata.get('message_id'):
@@ -1622,7 +1623,7 @@ async def chat_completion(
                             metadata['message_id'],
                             {
                                 'parentId': metadata.get('user_message_id', None),
-                                'error': {'content': error_detail},
+                                'error': {'content': error_detail, 'status_code': error_status},
                             },
                         )
 
@@ -1631,7 +1632,7 @@ async def chat_completion(
                         await event_emitter(
                             {
                                 'type': 'chat:message:error',
-                                'data': {'error': {'content': error_detail}},
+                                'data': {'error': {'content': error_detail, 'status_code': error_status}},
                             }
                         )
                         await event_emitter(
@@ -1646,7 +1647,7 @@ async def chat_completion(
                 # a proper HTTP response; without this the function would
                 # return None which FastAPI serializes as null.  #23924
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=error_status,
                     detail=error_detail,
                 )
         finally:
