@@ -168,8 +168,8 @@ def setup_knowledge_mcp(app: FastAPI, mount_path: str = '/api/v1/mcp') -> None:
 
     mcp = FastApiMCP(
         app,
-        name='Open WebUI Knowledge',
-        description='Read/write access to Open WebUI knowledge bases.',
+        name='Open WebUI Knowledge & Memory',
+        description='Read/write access to Open WebUI knowledge bases and user memories.',
         http_client=http_client,
         include_tags=[KNOWLEDGE_MCP_TAG],
         headers=['authorization'],

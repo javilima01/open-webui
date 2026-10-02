@@ -1986,7 +1986,7 @@ async def sync_knowledge_cleanup(
 ############################
 
 
-@router.post('/{id}/files/batch/add', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
+@router.post('/{id}/files/batch/add', response_model=KnowledgeFilesResponse | None)
 async def add_files_to_knowledge_batch(
     request: Request,
     id: str,
@@ -2109,7 +2109,7 @@ async def add_files_to_knowledge_batch(
 ############################
 
 
-@router.get('/{id}/export', tags=[KNOWLEDGE_MCP_TAG])
+@router.get('/{id}/export')
 async def export_knowledge_by_id(id: str, user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session)):
     """
     Export a knowledge base as a zip file containing .txt files.
