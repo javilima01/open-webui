@@ -93,6 +93,51 @@ class _ResponseCappingTransport(httpx.AsyncBaseTransport):
         await self._transport.aclose()
 
 
+def _force_stateless_mcp_sessions(mcp) -> None:
+    """Work around fastapi-mcp==0.4.0 hardcoding `stateless=False` (no public
+    toggle exists) when it builds the SDK's StreamableHTTPSessionManager --
+    see fastapi_mcp.transport.http.FastApiHttpSessionManager, which stores
+    sessions in a dict private to whichever worker process created them.
+    Under UVICORN_WORKERS>1 each worker has its own dict, so a session
+    created on one 404s ("Session not found") on every other worker and the
+    client disconnects/reconnects in a loop. There's no shared-store option
+    to configure instead -- it's an open, unimplemented feature request
+    upstream: https://github.com/tadata-org/fastapi_mcp/issues/208
+
+    None of the knowledge tools we expose need multi-turn session state,
+    sampling, or server-initiated notifications -- each tool call is just a
+    thin wrapper around a stateless REST endpoint -- so running the
+    transport stateless (a fresh transport per request; any client-supplied
+    session id is simply ignored rather than looked up) is safe here and
+    sidesteps the problem entirely instead of requiring session affinity in
+    front of the app. `self.stateless` is read fresh on every request
+    dispatch (mcp.server.streamable_http_manager), so flipping it after the
+    manager has already started still takes effect for every request that
+    follows.
+
+    This has to patch a private, underscore-prefixed hook because 0.4.0
+    exposes no public one; if a future version changes these internals this
+    silently becomes a no-op (logged), rather than raising.
+    """
+    http_transport = getattr(mcp, '_http_transport', None)
+    original_ensure_started = getattr(http_transport, '_ensure_session_manager_started', None)
+    if http_transport is None or original_ensure_started is None:
+        log.warning(
+            'Could not force MCP sessions stateless (fastapi-mcp internals changed); '
+            'sessions may break under UVICORN_WORKERS > 1.'
+        )
+        return
+
+    async def _ensure_started_stateless() -> None:
+        await original_ensure_started()
+        manager = getattr(http_transport, '_session_manager', None)
+        if manager is not None and not manager.stateless:
+            manager.stateless = True
+            log.info('MCP session manager forced stateless (safe under UVICORN_WORKERS > 1)')
+
+    http_transport._ensure_session_manager_started = _ensure_started_stateless
+
+
 def setup_knowledge_mcp(app: FastAPI, mount_path: str = '/api/v1/mcp') -> None:
     """Mount a FastAPI-MCP server exposing the knowledge routes tagged `mcp`.
 
@@ -130,4 +175,5 @@ def setup_knowledge_mcp(app: FastAPI, mount_path: str = '/api/v1/mcp') -> None:
         headers=['authorization'],
     )
     mcp.mount_http(router=app, mount_path=mount_path)
+    _force_stateless_mcp_sessions(mcp)
     log.info(f'FastAPI-MCP knowledge server mounted at {mount_path}')
