@@ -43,7 +43,7 @@ from open_webui.storage.provider import Storage
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.access_control.files import has_access_to_file
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.mcp import KNOWLEDGE_MCP_TAG
+from open_webui.utils.mcp.server import KNOWLEDGE_MCP_TAG
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -233,7 +233,7 @@ from open_webui.utils.chat_variables import (
 from open_webui.utils.embeddings import generate_embeddings, generate_reranking
 from open_webui.utils.json_response import apply_orjson_http_json
 from open_webui.utils.logger import start_logger
-from open_webui.utils.mcp import setup_knowledge_mcp
+from open_webui.utils.mcp.server import setup_knowledge_mcp
 from open_webui.utils.middleware import (
     background_tasks_handler,
     build_chat_response_context,
