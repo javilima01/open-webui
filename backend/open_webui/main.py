@@ -85,6 +85,8 @@ from open_webui.env import (
     ENABLE_EASTER_EGGS,
     ENABLE_PLUGINS,
     EXTERNAL_PWA_MANIFEST_URL,
+    # MCP
+    ENABLE_MCP_KNOWLEDGE_SERVER,
     # OAuth Back-Channel Logout
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
     ENABLE_OTEL,
@@ -231,6 +233,7 @@ from open_webui.utils.chat_variables import (
 from open_webui.utils.embeddings import generate_embeddings, generate_reranking
 from open_webui.utils.json_response import apply_orjson_http_json
 from open_webui.utils.logger import start_logger
+from open_webui.utils.mcp import setup_knowledge_mcp
 from open_webui.utils.middleware import (
     background_tasks_handler,
     build_chat_response_context,
@@ -2892,6 +2895,20 @@ def swagger_ui_html(*args, **kwargs):
 
 
 applications.get_swagger_ui_html = swagger_ui_html
+
+
+##################################
+#
+# Optional MCP: expose knowledge endpoints (fastapi-mcp)
+#
+##################################
+
+# Mounted here -- before the SPA '/' catch-all below -- so /api/v1/mcp is
+# matched by the router instead of being swallowed by the static fallback.
+# The exposed subset is controlled by the `mcp` tag on the knowledge routes
+# themselves (see open_webui.routers.knowledge), not a list here.
+if ENABLE_MCP_KNOWLEDGE_SERVER:
+    setup_knowledge_mcp(app)
 
 if os.path.exists(FRONTEND_BUILD_DIR):
     mimetypes.add_type('text/javascript', '.js')
