@@ -72,8 +72,16 @@ class _ResponseCappingTransport(httpx.AsyncBaseTransport):
 
         capped_body = json.dumps(_cap_json_value(data, self._max_chars, self._max_items)).encode('utf-8')
 
+        # response.aread() above already transparently decompressed the
+        # original body according to its real content-encoding; capped_body
+        # is fresh, uncompressed JSON, so the encoding/length headers that
+        # described the original compressed bytes no longer apply. Carrying
+        # them over verbatim claims e.g. "zstd" for a plain-text body, and
+        # httpx's own decoder then tries to zstd-decode it and raises
+        # (`ZstdError: Unknown frame descriptor`).
         headers = httpx.Headers(response.headers)
         headers.pop('content-length', None)
+        headers.pop('content-encoding', None)
         return httpx.Response(
             status_code=response.status_code,
             headers=headers,
