@@ -119,6 +119,7 @@ from open_webui.storage.provider import Storage
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.access_control.files import has_access_to_file
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.mcp.server import KNOWLEDGE_MCP_TAG
 from open_webui.utils.misc import (
     calculate_sha256_string,
     sanitize_text_for_db,
@@ -2740,7 +2741,7 @@ class QueryDocForm(BaseModel):
     hybrid_bm25_weight: float | None = None
 
 
-@router.post('/query/doc')
+@router.post('/query/doc', tags=[KNOWLEDGE_MCP_TAG])
 async def query_doc_handler(
     request: Request,
     form_data: QueryDocForm,
@@ -2806,7 +2807,7 @@ class QueryCollectionsForm(BaseModel):
     enable_enriched_texts: bool | None = None
 
 
-@router.post('/query/collection')
+@router.post('/query/collection', tags=[KNOWLEDGE_MCP_TAG])
 async def query_collection_handler(
     request: Request,
     form_data: QueryCollectionsForm,

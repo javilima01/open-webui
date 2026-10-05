@@ -845,6 +845,15 @@ OAUTH_TOKEN_EXCHANGE_TRUSTED_CLIENT_IDS = [
 ENABLE_OAUTH_BACKCHANNEL_LOGOUT = os.getenv('ENABLE_OAUTH_BACKCHANNEL_LOGOUT', 'False').lower() == 'true'
 
 ####################################
+# MCP Configuration
+####################################
+
+# When enabled, mounts a FastAPI-MCP server at /api/v1/mcp exposing the
+# knowledge routes tagged `mcp` (see open_webui.utils.mcp). Requires the
+# optional `fastapi-mcp` dependency to be installed.
+ENABLE_MCP_KNOWLEDGE_SERVER = os.getenv('ENABLE_MCP_KNOWLEDGE_SERVER', 'False').lower() == 'true'
+
+####################################
 # SCIM Configuration
 ####################################
 
