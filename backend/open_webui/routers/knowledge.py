@@ -47,6 +47,7 @@ from open_webui.utils.access_control import filter_allowed_access_grants, has_pe
 from open_webui.utils.access_control.files import has_access_to_file
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.json_codec import JSONCodec
+from open_webui.utils.mcp.server import KNOWLEDGE_MCP_TAG
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,7 +170,7 @@ async def _verify_directory_in_knowledge(
         )
 
 
-@router.get('/', response_model=KnowledgeAccessListResponse)
+@router.get('/', response_model=KnowledgeAccessListResponse, tags=[KNOWLEDGE_MCP_TAG])
 async def get_knowledge_bases(
     page: int | None = 1,
     user=Depends(get_verified_user),
@@ -218,7 +219,7 @@ async def get_knowledge_bases(
     )
 
 
-@router.get('/search', response_model=KnowledgeAccessListResponse)
+@router.get('/search', response_model=KnowledgeAccessListResponse, tags=[KNOWLEDGE_MCP_TAG])
 async def search_knowledge_bases(
     query: str | None = None,
     view_option: str | None = None,
@@ -283,7 +284,7 @@ async def search_knowledge_bases(
     )
 
 
-@router.get('/search/files', response_model=KnowledgeFileListResponse)
+@router.get('/search/files', response_model=KnowledgeFileListResponse, tags=[KNOWLEDGE_MCP_TAG])
 async def search_knowledge_files(
     query: str | None = None,
     include_content: bool = Query(False, description='Include file content in search (expensive).'),
@@ -315,7 +316,7 @@ async def search_knowledge_files(
 ############################
 
 
-@router.post('/create', response_model=KnowledgeResponse | None)
+@router.post('/create', response_model=KnowledgeResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def create_new_knowledge(
     request: Request,
     form_data: KnowledgeForm,
@@ -1096,7 +1097,7 @@ class KnowledgeFilesResponse(KnowledgeResponse):
     write_access: bool | None = False
 
 
-@router.get('/{id}', response_model=KnowledgeFilesResponse | None)
+@router.get('/{id}', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def get_knowledge_by_id(id: str, user=Depends(get_verified_user), db: AsyncSession = Depends(get_async_session)):
     knowledge = await Knowledges.get_knowledge_by_id(id=id, db=db)
 
@@ -1143,7 +1144,7 @@ async def get_knowledge_by_id(id: str, user=Depends(get_verified_user), db: Asyn
 ############################
 
 
-@router.post('/{id}/update', response_model=KnowledgeFilesResponse | None)
+@router.post('/{id}/update', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def update_knowledge_by_id(
     request: Request,
     id: str,
@@ -1281,7 +1282,7 @@ async def update_knowledge_access_by_id(
 ############################
 
 
-@router.get('/{id}/files/pending')
+@router.get('/{id}/files/pending', tags=[KNOWLEDGE_MCP_TAG])
 async def get_pending_knowledge_files(
     id: str,
     stream: bool = Query(False),
@@ -1348,7 +1349,7 @@ async def get_pending_knowledge_files(
 ############################
 
 
-@router.get('/{id}/files', response_model=KnowledgeFileListResponse)
+@router.get('/{id}/files', response_model=KnowledgeFileListResponse, tags=[KNOWLEDGE_MCP_TAG])
 async def get_knowledge_files_by_id(
     id: str,
     query: str | None = None,
@@ -1422,7 +1423,7 @@ class KnowledgeFileIdForm(BaseModel):
     directory_id: Optional[str] = None
 
 
-@router.post('/{id}/file/add', response_model=KnowledgeFilesResponse | None)
+@router.post('/{id}/file/add', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def add_file_to_knowledge_by_id(
     request: Request,
     id: str,
@@ -1521,7 +1522,7 @@ async def add_file_to_knowledge_by_id(
         )
 
 
-@router.post('/{id}/file/update', response_model=KnowledgeFilesResponse | None)
+@router.post('/{id}/file/update', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def update_file_from_knowledge_by_id(
     request: Request,
     id: str,
@@ -1610,7 +1611,7 @@ async def update_file_from_knowledge_by_id(
 ############################
 
 
-@router.post('/{id}/file/remove', response_model=KnowledgeFilesResponse | None)
+@router.post('/{id}/file/remove', response_model=KnowledgeFilesResponse | None, tags=[KNOWLEDGE_MCP_TAG])
 async def remove_file_from_knowledge_by_id(
     request: Request,
     id: str,
@@ -2265,7 +2266,7 @@ async def _verify_knowledge_write_access(id: str, user, db: AsyncSession):
     return knowledge
 
 
-@router.post('/{id}/dirs/create', response_model=KnowledgeDirectoryModel)
+@router.post('/{id}/dirs/create', response_model=KnowledgeDirectoryModel, tags=[KNOWLEDGE_MCP_TAG])
 async def create_knowledge_directory(
     request: Request,
     id: str,
@@ -2299,7 +2300,7 @@ async def create_knowledge_directory(
     return directory
 
 
-@router.post('/{id}/dirs/{dir_id}/update', response_model=KnowledgeDirectoryModel)
+@router.post('/{id}/dirs/{dir_id}/update', response_model=KnowledgeDirectoryModel, tags=[KNOWLEDGE_MCP_TAG])
 async def update_knowledge_directory(
     request: Request,
     id: str,
@@ -2388,7 +2389,7 @@ async def delete_knowledge_directory(
     return {'status': True}
 
 
-@router.post('/{id}/file/move')
+@router.post('/{id}/file/move', tags=[KNOWLEDGE_MCP_TAG])
 async def move_file_in_knowledge(
     request: Request,
     id: str,

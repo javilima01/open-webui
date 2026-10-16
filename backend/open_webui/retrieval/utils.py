@@ -487,7 +487,8 @@ async def query_doc_with_hybrid_search(
     enable_enriched_texts: bool = False,
     native_hybrid_search: bool = True,
 ) -> dict:
-    if native_hybrid_search and not enable_enriched_texts:
+    # Enriched texts are baked into the sparse index at ingestion (see qdrant.py).
+    if native_hybrid_search:
         native_result = await query_doc_with_native_hybrid_search(
             collection_name=collection_name,
             query=query,
@@ -787,7 +788,8 @@ async def query_collection_with_hybrid_search(
     last_error = None
     failed_collection_names = set()
 
-    if not enable_enriched_texts:
+    # Enriched texts are baked into the sparse index at ingestion (see qdrant.py).
+    if _supports_native_hybrid_search():
 
         async def process_native_query(collection_name, query):
             result = await query_doc_with_native_hybrid_search(

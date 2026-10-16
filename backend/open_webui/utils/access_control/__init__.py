@@ -406,10 +406,6 @@ async def check_model_access(
                     model_info.id,
                 )
                 raise HTTPException(status_code=403, detail='Model not found')
-
-            # Enforce access on chained base models
-            if not await has_base_model_access(user.id, model_info, user_role=user.role, user_group_ids=user_group_ids):
-                raise HTTPException(status_code=403, detail='Model not found')
     else:
         if user.role != 'admin':
             log.warning('Model access denied: user_id=%r reason=model_unregistered', user.id)

@@ -37,14 +37,23 @@ def bearer_auth_header(token: Any) -> dict[str, str]:
 def get_json_bearer_headers(token: Any = '') -> dict[str, str]:
     return {'Content-Type': 'application/json', **bearer_auth_header(token)}
 
+def _user_attr(user: Any, name: str) -> str:
+    """Read a user attribute defensively.
+
+    Some call sites build partial ``UserModel.model_construct(id=..., role=...)``
+    objects, where unset fields raise AttributeError instead of returning a
+    default. Forwarding identity headers must never break the request.
+    """
+    return getattr(user, name, None) or ''
+
 
 def _mint_forward_user_jwt(user: Any) -> str:
     now = int(time.time())
     payload = {
         'sub': str(user.id),
-        'email': str(user.email),
-        'name': str(user.name),
-        'role': str(user.role),
+        'email': str(_user_attr(user, 'email')),
+        'name': str(_user_attr(user, 'name')),
+        'role': str(_user_attr(user, 'role')),
         'iss': 'open-webui',
         'iat': now,
         'exp': now + FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS,
@@ -78,10 +87,10 @@ def include_user_info_headers(headers: dict, user: Optional[Any] = None, *, requ
 
     return {
         **headers,
-        FORWARD_USER_INFO_HEADER_USER_NAME: quote(user.name.strip(), safe=' '),
+        FORWARD_USER_INFO_HEADER_USER_NAME: quote(_user_attr(user, 'name').strip(), safe=' '),
         FORWARD_USER_INFO_HEADER_USER_ID: user.id,
-        FORWARD_USER_INFO_HEADER_USER_EMAIL: user.email.strip(),
-        FORWARD_USER_INFO_HEADER_USER_ROLE: user.role,
+        FORWARD_USER_INFO_HEADER_USER_EMAIL: _user_attr(user, 'email').strip(),
+        FORWARD_USER_INFO_HEADER_USER_ROLE: _user_attr(user, 'role'),
     }
 
 

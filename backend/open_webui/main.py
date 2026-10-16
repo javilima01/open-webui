@@ -87,6 +87,8 @@ from open_webui.env import (
     ENABLE_CUSTOM_MODEL_FALLBACK,
     ENABLE_EASTER_EGGS,
     ENABLE_FUNCTIONS,
+    # MCP
+    ENABLE_MCP_KNOWLEDGE_SERVER,
     # OAuth Back-Channel Logout
     ENABLE_OAUTH_BACKCHANNEL_LOGOUT,
     ENABLE_OTEL,
@@ -243,11 +245,12 @@ from open_webui.utils.chat_id import (
 from open_webui.utils.chat_variables import (
     normalize_chat_variables,
 )
-from open_webui.utils.embeddings import generate_embeddings
+from open_webui.utils.embeddings import generate_embeddings, generate_reranking
 from open_webui.utils.headers import get_headers_and_cookies
 from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.json_response import apply_orjson_http_json
 from open_webui.utils.logger import start_logger
+from open_webui.utils.mcp.server import setup_knowledge_mcp
 from open_webui.utils.middleware import (
     background_tasks_handler,
     build_chat_response_context,
@@ -1124,6 +1127,35 @@ async def embeddings(request: Request, form_data: dict, user=Depends(get_verifie
     return await generate_embeddings(request, form_data, user)
 
 
+##################################
+# Reranking
+##################################
+
+
+@app.post('/api/rerank')
+@app.post('/api/v1/rerank')  # Experimental: Compatibility with OpenAI API
+async def rerank(request: Request, form_data: dict, user=Depends(get_verified_user)):
+    """
+    OpenAI-compatible reranking endpoint.
+
+    This handler dispatches to the configured reranking backend (external
+    OpenAI-compatible reranker, sentence-transformers cross-encoder, etc.) and
+    returns an OpenAI-compatible (Jina/Cohere-style) rerank response.
+
+    Args:
+        request (Request): Request context.
+        form_data (dict): OpenAI-like payload (e.g., {"model": "...", "query": "...", "documents": [...], "top_n": n}).
+        user (UserModel): Authenticated user.
+
+    Returns:
+        dict: OpenAI-compatible rerank response.
+    """
+    # Make sure models are loaded in app state
+    if not request.app.state.MODELS:
+        await get_all_models(request, user=user)
+    return await generate_reranking(request, form_data, user)
+
+
 async def _set_direct_model(request: Request, model_item: dict, user) -> None:
     model_meta = (model_item.get('info') or {}).get('meta') or {}
     knowledge_items = model_meta.get('knowledge')
@@ -1539,6 +1571,8 @@ async def chat_completion(
                             'request': request,
                             'form_data': form_data,
                             'user': user,
+                            # background_tasks_handler needs it for the memory review
+                            'model': model,
                             'metadata': title_metadata,
                             'tasks': {TASKS.TITLE_GENERATION: initial_title_generation},
                             'event_emitter': event_emitter,
@@ -1637,6 +1671,7 @@ async def chat_completion(
 
     async def process_chat(request, form_data, user, metadata, model, tasks=None):
         error_detail = None
+        error_status = None
         try:
             try:
                 if not metadata.get('direct'):
@@ -1665,6 +1700,7 @@ async def chat_completion(
 
                 if isinstance(response, Response) and response.status_code >= 400:
                     error_detail = get_response_error_detail(response)
+                    error_status = response.status_code
                     if metadata.get('session_id') and metadata.get('chat_id'):
                         return None
                     return response
@@ -1690,6 +1726,7 @@ async def chat_completion(
                 raise  # re-raise to ensure proper task cancellation handling
             except Exception as e:
                 error_detail = e.detail if isinstance(e, HTTPException) else str(e)
+                error_status = e.status_code if isinstance(e, HTTPException) else status.HTTP_400_BAD_REQUEST
                 if not (metadata.get('session_id') and metadata.get('chat_id')):
                     raise
             finally:
@@ -1703,7 +1740,7 @@ async def chat_completion(
                                     metadata['message_id'],
                                     {
                                         'parentId': metadata.get('user_message_id'),
-                                        'error': {'content': error_detail},
+                                        'error': {'content': error_detail, 'status_code': error_status},
                                         'done': True,
                                     },
                                 )
@@ -1716,7 +1753,10 @@ async def chat_completion(
                                 await event_emitter(
                                     {
                                         'type': 'chat:message:error',
-                                        'data': {'error': {'content': error_detail}, 'done': True},
+                                        'data': {
+                                            'error': {'content': error_detail, 'status_code': error_status},
+                                            'done': True,
+                                        },
                                     }
                                 )
                         except Exception:
@@ -3143,6 +3183,20 @@ def swagger_ui_html(*args, **kwargs):
 
 
 applications.get_swagger_ui_html = swagger_ui_html
+
+
+##################################
+#
+# Optional MCP: expose knowledge endpoints (fastapi-mcp)
+#
+##################################
+
+# Mounted here -- before the SPA '/' catch-all below -- so /api/v1/mcp is
+# matched by the router instead of being swallowed by the static fallback.
+# The exposed subset is controlled by the `mcp` tag on the knowledge routes
+# themselves (see open_webui.routers.knowledge), not a list here.
+if ENABLE_MCP_KNOWLEDGE_SERVER:
+    setup_knowledge_mcp(app)
 
 if os.path.exists(FRONTEND_BUILD_DIR):
     pyodide_dir = FRONTEND_BUILD_DIR / 'pyodide'

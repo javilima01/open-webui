@@ -15,6 +15,7 @@ from open_webui.models.users import Users
 from open_webui.retrieval.vector.async_client import ASYNC_VECTOR_DB_CLIENT
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.mcp.server import KNOWLEDGE_MCP_TAG
 from open_webui.utils.memory import (
     clean_memory_content,
     clean_memory_path,
@@ -54,7 +55,7 @@ async def check_memories_permission(user):
 ############################
 
 
-@router.get('/', response_model=list[MemoryModel])
+@router.get('/', response_model=list[MemoryModel], tags=[KNOWLEDGE_MCP_TAG])
 async def get_memories(
     request: Request,
     user=Depends(get_verified_user),
@@ -180,7 +181,7 @@ async def upsert_memory_vectors_or_reindex(request: Request, user, items: list[d
         await reindex_memory_vectors_for_user(request, user.id, user=user)
 
 
-@router.post('/add', response_model=MemoryModel | None)
+@router.post('/add', response_model=MemoryModel | None, tags=[KNOWLEDGE_MCP_TAG])
 async def add_memory(
     request: Request,
     form_data: AddMemoryForm,
@@ -329,7 +330,7 @@ class QueryMemoryForm(BaseModel):
     k: int | None = 1
 
 
-@router.post('/query')
+@router.post('/query', tags=[KNOWLEDGE_MCP_TAG])
 async def query_memory(
     request: Request,
     form_data: QueryMemoryForm,
@@ -388,7 +389,7 @@ async def query_memory(
     return results
 
 
-@router.post('/search', response_model=list[MemoryModel])
+@router.post('/search', response_model=list[MemoryModel], tags=[KNOWLEDGE_MCP_TAG])
 async def search_memories(
     form_data: SearchMemoriesForm,
     user=Depends(get_verified_user),
@@ -406,7 +407,7 @@ async def search_memories(
     )
 
 
-@router.post('/paths')
+@router.post('/paths', tags=[KNOWLEDGE_MCP_TAG])
 async def list_memory_paths(
     form_data: ListMemoryPathsForm,
     user=Depends(get_verified_user),
@@ -422,7 +423,7 @@ async def list_memory_paths(
     )
 
 
-@router.post('/path')
+@router.post('/path', tags=[KNOWLEDGE_MCP_TAG])
 async def read_memory_path(
     form_data: ReadMemoryPathForm,
     user=Depends(get_verified_user),
@@ -545,7 +546,7 @@ async def delete_memory_by_user_id(
 ############################
 
 
-@router.post('/{memory_id}/update', response_model=MemoryModel | None)
+@router.post('/{memory_id}/update', response_model=MemoryModel | None, tags=[KNOWLEDGE_MCP_TAG])
 async def update_memory_by_id(
     memory_id: str,
     request: Request,
@@ -607,7 +608,7 @@ async def update_memory_by_id(
 ############################
 
 
-@router.delete('/{memory_id}', response_model=bool)
+@router.delete('/{memory_id}', response_model=bool, tags=[KNOWLEDGE_MCP_TAG])
 async def delete_memory_by_id(
     memory_id: str,
     request: Request,
