@@ -637,6 +637,65 @@ async def get_filtered_models(models, user, db=None):
     return filtered_models
 
 
+# Connections whose models are fetched with the requesting user's own
+# credentials can legitimately return a different list per user, so a list
+# fetched for one user is never reused for another.
+_PER_USER_AUTH_TYPES = frozenset({'session', 'system_oauth'})
+
+
+def reuse_last_good_model_lists(request: Request, api_base_urls: list, api_configs: dict, model_lists: list) -> list:
+    """Replace a *failed* per-connection model list with that connection's last good one.
+
+    ``send_get_request`` turns every timeout / connection error into ``None``.
+    Treating that as "this connection has no models" made the merged list
+    shorter, and ``get_all_models`` then published it to the shared Redis
+    ``MODELS`` hash, removing those models for every worker ("Model not
+    found").  A successful response, including an empty one, is applied as-is
+    and becomes the new last good list; disabled, removed and per-user
+    connections are never preserved.
+    """
+    last_good = getattr(request.app.state, 'OPENAI_MODEL_LISTS_LAST_GOOD', None)
+    if last_good is None:
+        last_good = request.app.state.OPENAI_MODEL_LISTS_LAST_GOOD = {}
+    failing = getattr(request.app.state, 'OPENAI_MODEL_LISTS_FAILING', None)
+    if failing is None:
+        failing = request.app.state.OPENAI_MODEL_LISTS_FAILING = set()
+
+    result = []
+    current_keys = set()
+    for idx, model_list in enumerate(model_lists):
+        url = api_base_urls[idx]
+        api_config = api_configs.get(str(idx), api_configs.get(url, {}))
+        key = (idx, url, api_config.get('prefix_id'))
+
+        if not api_config.get('enable', True) or api_config.get('auth_type') in _PER_USER_AUTH_TYPES:
+            result.append(model_list)
+            continue
+
+        current_keys.add(key)
+        if model_list is not None:
+            last_good[key] = model_list
+            if key in failing:
+                failing.discard(key)
+                log.info(f'Model list for OpenAI connection {idx} ({url}) recovered')
+        elif key in last_good:
+            if key not in failing:
+                failing.add(key)
+                log.warning(
+                    f'Model list request for OpenAI connection {idx} ({url}) failed; '
+                    f'keeping its last known {len(last_good[key])} models until it responds again'
+                )
+            model_list = last_good[key]
+        result.append(model_list)
+
+    # Forget connections that were removed, disabled or switched to per-user auth.
+    for key in [k for k in last_good if k not in current_keys]:
+        del last_good[key]
+        failing.discard(key)
+
+    return result
+
+
 @cached(
     ttl=MODELS_CACHE_TTL,
     # key_builder (not key) is the per-call hook in aiocache 0.12; `key=` is a
@@ -704,7 +763,8 @@ async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
 
         return models
 
-    models = get_merged_models(map(extract_data, responses))
+    model_lists = reuse_last_good_model_lists(request, api_base_urls, api_configs, list(map(extract_data, responses)))
+    models = get_merged_models(model_lists)
     log.debug(f'models: {models}')
 
     request.app.state.OPENAI_MODELS = models
